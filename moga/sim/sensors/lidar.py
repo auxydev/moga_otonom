@@ -1,7 +1,7 @@
 """Rotating multi-beam LiDAR model (ray casting).
 
-32 beams between -25 deg and +10 deg elevation, 0.4 deg azimuth resolution,
-10 Hz.  Rays are intersected with the ground plane, traffic participants and
+32 beams between -25 deg and +10 deg elevation (0.33 deg spacing around the
+horizon), 0.2 deg azimuth resolution, 10 Hz, 150 m range.  Rays are intersected with the ground plane, traffic participants and
 static scenery boxes (slab method, restricted to the azimuth sector each box
 covers).  Range noise, beam dropout, reflectivity (lane paint is brighter)
 and rain clutter are modelled.  Points are returned in the vehicle frame
@@ -18,14 +18,19 @@ from moga.common.messages import PointCloud
 from moga.sim.sensors.base import Sensor
 
 
+# 32 beams, dense (0.33 deg) around the horizon for long-range detection,
+# sparse towards the ground / sky (similar to commercial 32-beam units)
+BEAMS_32 = (-25.0, -19.0, -15.0, -12.0, -10.0, -8.5, -7.2, -6.0, -5.0, -4.2, -3.5, -2.9,
+            -2.4, -2.0, -1.67, -1.33, -1.0, -0.67, -0.33, 0.0, 0.33, 0.67, 1.0, 1.33, 1.67,
+            2.0, 3.0, 4.0, 5.5, 7.0, 8.5, 10.0)
+
+
 @dataclass
 class LidarConfig:
     rate: float = 10.0
-    channels: int = 32
-    elev_min_deg: float = -25.0
-    elev_max_deg: float = 10.0
-    az_res_deg: float = 0.4
-    max_range: float = 100.0
+    elevations_deg: tuple = BEAMS_32
+    az_res_deg: float = 0.2
+    max_range: float = 150.0
     range_sigma: float = 0.02
     dropout: float = 0.01
 
@@ -37,13 +42,13 @@ class LidarSensor(Sensor):
         super().__init__(cfg.rate, rng)
         self.cfg = cfg
         self.mount = world.ego.p.lidar_mount
-        el = np.radians(np.linspace(cfg.elev_min_deg, cfg.elev_max_deg, cfg.channels))
+        el = np.radians(np.asarray(cfg.elevations_deg, dtype=float))
         az = np.radians(np.arange(-180.0, 180.0, cfg.az_res_deg))
         self.az = az
         self.el = el
         E, A = np.meshgrid(el, az, indexing="ij")          # (channels, n_az)
         self.dir = np.stack([np.cos(E) * np.cos(A), np.cos(E) * np.sin(A), np.sin(E)], -1)
-        self.ring = np.repeat(np.arange(cfg.channels)[:, None], len(az), axis=1)
+        self.ring = np.repeat(np.arange(len(el))[:, None], len(az), axis=1)
         h = self.mount.z
         with np.errstate(divide="ignore"):
             self.t_ground = np.where(self.dir[..., 2] < -1e-6, h / -self.dir[..., 2], np.inf)

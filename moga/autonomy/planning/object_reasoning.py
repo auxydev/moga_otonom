@@ -30,7 +30,6 @@ def path_obstacles(path: Polyline, s_ego: float, v_ego: float, preds: list[Predi
     front = s_ego + p.front_bumper
     for pr in preds:
         tr = pr.track
-        dist = math.hypot(tr.x - path.points[0][0], tr.y - path.points[0][1])
         prob, traj = max(pr.modes, key=lambda m: m[0])
         # current position in path coordinates
         s0, d0 = path.project(np.array([tr.x, tr.y]), s_hint=s_ego + 30.0, window=horizon_s)

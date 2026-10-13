@@ -11,7 +11,7 @@ yeşilken tamamlanmış sayılır (regresyon koruması).
 | M1 | Lokalizasyon + GPS tabanlı otonom sürüş | GNSS/IMU/teker odometrisi sensör modelleri, WGS‑84↔ENU, EKF füzyonu, GPS görev (lat/lon) → şerit seviyesinde rota (A*), pure‑pursuit + PID | Araç yalnızca sensör verisiyle GPS hedeflerine gider | ✅ |
 | M2 | Kamera ile şerit algılama + şerit takibi | Kamera sensör modeli, IPM, sırt (ridge) filtresi, kayan pencere, polinom uydurma, zamansal filtre, Stanley kontrolcü, şerit‑göreli lokalizasyon düzeltmesi | Virajlı yolda kamera tabanlı şerit takibi, GNSS kesintisinde şeritle konum düzeltme | ✅ |
 | M3 | LiDAR/Radar algılama + çoklu nesne takibi | Işın izleme LiDAR, radar, zemin ayrıştırma (RANSAC), harita ROI, kümeleme, L‑shape kutu uydurma, sınıflandırma, KF + Macar algoritması ile takip, radar füzyonu, şerit tabanlı tahmin | Trafik içinde nesneler tespit/takip edilir, ACC ile takip | ✅ |
-| M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ⏳ |
+| M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ✅ |
 | M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ⏳ |
 | M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ⏳ |
 
@@ -123,7 +123,8 @@ planlanmaz; araç `LOCALIZING` modunda kamerayla doğrudan şerit takibi yapar.
 ## M3 – LiDAR/radar algılama, çoklu nesne takibi, tahmin, ACC (tamamlandı)
 
 **Sensör modelleri**
-* `sim/sensors/lidar.py` – 32 kanallı dönen LiDAR (‑25°…+10°, 0.4° azimut, 10 Hz, 100 m):
+* `sim/sensors/lidar.py` – 32 kanallı dönen LiDAR (‑25°…+10°, ufuk çevresinde 0.33° sık
+  kanallar, 0.2° azimut, 10 Hz, 150 m):
   zemin düzlemi + araç/yaya/yapı kutularıyla ışın kesişimi (kutunun kapladığı azimut
   sektörüyle sınırlı → ~4 ms/kare), menzil gürültüsü, ışın kaybı, şerit boyası
   yansıtıcılığı, yağmurda menzil düşüşü ve yakın mesafe yağmur gürültüsü.
@@ -166,3 +167,84 @@ sınıf doğruluğu **%100**.
 
 ![](images/m3_highway_tracking.png)
 ![](images/m3_acc_stop_and_go.png)
+
+## M4 – Davranış ve hareket planlama (tamamlandı)
+
+Planlama hattı her 0.1 s'de çalışır:
+`rota takibi → referans çizgisi → nesne akıl yürütme → davranış (FSM) → Frenet kafes
+planlayıcı → yörünge kontrolcüsü`, bunlardan bağımsız olarak **AEB** son savunma hattıdır.
+
+**Taktik planlama** (`autonomy/planning/planner.py`, `reference.py`)
+* Rota takibi: şerit seviyesindeki rotada ilerleme, sıradaki zorunlu şerit değişimi
+  (yön, kalan mesafe, ardışık değişim sayısı), hedefe kalan mesafe, kapalı pistte tur geçişi.
+  Zorunlu değişim yalnızca aciliyet kazandığında (≥ n·max(200 m, 10 s)) devreye girer;
+  öncesinde şerit seçimi serbesttir (sollama, sağdan gitme).
+* Referans çizgisi: rota tercihli şerit zinciri, eğrilik → yanal ivme limitli hız
+  profili + ileriye bakan yavaşlama, komşu şeritler.
+* Nesne akıl yürütme: tahmin edilen nesneler referansın Frenet çerçevesine yansıtılır;
+  şerit başına öndeki / arkadaki araç boşluğu ve hızı, durağan engel tespiti.
+
+**Davranış katmanı** (`behavior.py`) – durum makinesi
+`LANE_KEEP → PREPARE_LC (sinyal, boşluk bekleme) → LANE_CHANGE`, `BLOCKED → BYPASS`.
+Şerit değiştirme nedenleri (öncelik sırasıyla): **rota** (zorunlu), **engel**, yavaş öncü
+aracı **soldan sollama**, sollamadan sonra **sağa dönüş**. Boşluk kabulü arka/ön araç
+mesafesi ve hız farkına göre yapılır (zorunlu değişimlerde gevşetilir).
+
+**Frenet kafes planlayıcı** (`frenet.py`, Werling vd. 2010)
+* yanal: hedef ofsetlere 5. derece polinomlar; yüksek hızda zamana, düşük hızda
+  (< 4 m/s) yola bağlı `d(s)`,
+* boylamsal: hız tutma (4. derece), takip ve durma (5. derece, doğal durma süreleri dahil),
+  duruşta "yerinde bekle" adayı,
+* önceki planın Frenet durumundan (konum, hız, **ivme**) dikiş (stitching); yola bağlı yanal
+  manevrada önceki bitiş noktası aday olarak korunur → yeniden planlama manevrayı ötelemez,
+* fizibilite: ivme, eğrilik, yanal ivme, yol sınırları, hız limiti (geç fark edilen duruşlarda
+  gereken yavaşlamaya göre uyarlanan durma profili),
+* çarpışma: ego ve nesneler daire ayrıştırması, tüm tahmin modları (olasılığa göre sert /
+  yumuşak), "zaten yakınsak daha da yaklaşma" kuralı, yol‑zaman (ST) aralık kısıtları
+  (sert 1 m + 0.25·v, yumuşak 4 m + 1.6 s·v); arkadan gelen aynı şerit trafiği planı zorlamaz,
+* maliyet: sarsıntı, hedef ofset, ideal hız profiline göre eksik, engellere yakınlık,
+  konfor üstü fren cezası.
+
+**Yörünge kontrolcüsü** (`control/trajectory_controller.py`): plan üzerinde Stanley (geri
+yay uzatmalı), zaman indeksli hız referansı + ivme ileri beslemesi, duruşta fren tutma.
+
+**Engel geçişi (bypass) – iki şeritli yolda karşı şerit kullanımı**
+* engelin 8 m gerisinde (yanal manevra için yer bırakarak) durma,
+* **boşluk kabulü**: manevra süresi (kalkıştan 1.4 m/s² ile 9 m/s'ye, engeli geçip şeride
+  dönene kadar) + 3 s tampon, karşıdan gelen aracın manevra bölgesine varış süresinden kısa
+  olmalı; histerezisli ve araç engelin yanına gelene kadar her döngüde yeniden
+  değerlendirilir → yeni bir araç görünürse manevra iptal edilip şeride dönülür,
+* uzun menzil farkındalığı: LiDAR algılama menzili 120 m; LiDAR'ın göremediği (> 60 m)
+  hareketli hedefler için radar konum + Doppler güncellemeli **yalnız‑radar izler** (~160 m).
+
+**Bağımsız AEB** (`safety/aeb.py`): planlayıcıdan bağımsız son savunma. İzlerden ve kısa
+menzilde ham LiDAR noktalarından çarpışma süresi + gereken yavaşlama hesaplanır;
+yalnızca TTC < 2.5 s **ve** gereken yavaşlama > 5 m/s² iken 8.5 m/s² ile frenler.
+Eğrilik sönümlü yol tahmini; bizden hızlı uzaklaşan araçların noktaları yok sayılır
+(şerit değiştirirken komşu şeritteki araç yanlış tetikleme yapmaz).
+
+**Tahmin iyileştirmeleri**: virajdaki küçük yön hataları şerit değiştirme sayılmaz (yanal
+hız > 1.2 m/s ya da kaymış olup aynı yöne hareket gerekir), şerit değiştirme hedefi komşu
+şerit merkeziyle sınırlı; aynı yönde komşu şerit yoksa yalnızca düşük olasılıklı (yumuşak)
+hipotez; frenleyen araçlar için sabit yavaşlama; yola yakın yayalar için yola girme hipotezi.
+
+**Simülatör düzeltmesi**: kamera, araç gri tonunu süreç başına rastgele olan `hash()` ile
+seçiyordu → sonuçlar `PYTHONHASHSEED`'e bağlıydı. CRC32 ile deterministik hale getirildi;
+`tests/test_determinism.py` farklı süreç / hash tohumlarında birebir aynı sonucu doğrular.
+
+| Senaryo | İçerik | min TTC | maks. yavaşlama | Not |
+|---|---|---|---|---|
+| `m4_overtake_slow_truck` | Sağ şeritte yavaş tır, orta şeritte trafik: boşluk bekle, sola geç, sollama, sağa dön | 7.2 s | 3.2 m/s² | ort. hız ≥ 68 km/h |
+| `m4_cut_in` | ~12 m önüne kesip yavaşlayan araç: acil fren olmadan mesafe aç | – | 3.2 m/s² | min. mesafe 7.1 m |
+| `m4_static_obstacle_lane_change` | Şeritte arızalı araç, iki komşu şeritte trafik: boşluğa geç, engeli geç | 2.5 s | 5.0 m/s² | |
+| `m4_route_lane_changes_traffic` | GPS hedefi sağ şeritte, sağ ve orta şerit yoğun: iki zorunlu şerit değişimi | 11.4 s | 2.8 m/s² | |
+| `m4_rural_bypass` | İki şeritli yolda arızalı araç + karşıdan gelen trafik: bekle, boşlukta karşı şeritten geç | 1.6 s | 3.7 m/s² | 15 s bekleme |
+| `m4_aeb_occluded_pedestrian` | Park etmiş minibüsün arkasından 17 m önde fırlayan yaya (40 km/h) | – | 8.2 m/s² (AEB) | yayaya mesafe 1.2 m |
+
+Kabul kriterleri: çarpışma yok, hedefe varış, normal manevralarda **acil durma / AEB yok**,
+min TTC ≥ 1.5 s, konfor yavaşlaması ≤ 4 m/s² (engel senaryosunda ≤ 5.5 m/s²), yayaya
+mesafe > 0.3 m. Regresyon: M0–M4'ün 24 senaryosu + birim testleri yeşil.
+
+![](images/m4_overtake.png)
+![](images/m4_rural_bypass.png)
+![](images/m4_aeb_pedestrian.png)

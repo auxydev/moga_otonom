@@ -141,7 +141,10 @@ class VehicleModel:
         x, y, yaw, vx, vy, r = new
         if vx < 0.0:
             vx, vy, r = 0.0, 0.0, 0.0
-        s.ay = (vy - s.vy) / h + r * vx
+        # lateral acceleration (low-pass: avoids numerical spikes in the
+        # kinematic/dynamic blending region, similar to an IMU bandwidth)
+        ay_raw = (vy - s.vy) / h + r * vx
+        s.ay += (ay_raw - s.ay) * min(1.0, h / 0.05)
         s.ax = a_long
         s.x, s.y, s.yaw, s.vx, s.vy, s.r = x, y, float(wrap_angle(yaw)), vx, vy, r
         self._energy(p_batt, h)

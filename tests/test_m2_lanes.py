@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from moga.autonomy.localization.ekf import IX, IY, IYAW, PoseEKF
+from moga.autonomy.localization.ekf import IX, IY, PoseEKF
 from moga.autonomy.perception.lane_detection import LaneDetector
 from moga.map.library import highway_curvy, rural_two_lane
 from moga.sim.oracle import OracleDriver

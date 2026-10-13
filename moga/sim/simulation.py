@@ -2,7 +2,6 @@
 oracle) + metrics + frame recording for visualisation."""
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -15,7 +14,7 @@ from moga.common.messages import ControlCommand, SensorBundle
 from moga.common.vehicle_params import MOGA, VehicleParams
 from moga.eval.metrics import MetricsTracker, evaluate
 from moga.sim.scenario import Scenario
-from moga.sim.sensors.base import SensorSuite, VehicleStatusSensor
+from moga.sim.sensors.base import SensorSuite
 from moga.sim.vehicle_model import VehicleModel
 from moga.sim.world import TrafficLightController, World
 

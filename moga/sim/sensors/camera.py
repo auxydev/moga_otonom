@@ -15,6 +15,7 @@ followed by weather-dependent contrast reduction and sensor noise.
 from __future__ import annotations
 
 import math
+import zlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -352,7 +353,8 @@ class CameraSensor(Sensor):
                 tmax = np.minimum.reduce([np.maximum(t1, t2), np.maximum(t3, t4), np.maximum(t5, t6)])
             hit = (tmax >= tmin) & (tmax > 0) & np.isfinite(tmin)
             # darker sides, lighter top/rear for some shading variety
-            img[pix[hit]] = 55.0 + 35.0 * (abs(hash(a.id)) % 4)
+            # (crc32: str hash() is randomised per process -> not reproducible)
+            img[pix[hit]] = 55.0 + 35.0 * (zlib.crc32(str(a.id).encode()) % 4)
 
     def measure(self, world):
         if self.blackout:

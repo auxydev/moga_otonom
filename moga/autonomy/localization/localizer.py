@@ -10,7 +10,7 @@ from moga.autonomy.localization.ekf import IBG, IV, IX, IY, IYAW, PoseEKF
 from moga.common.geodesy import LocalCartesian
 from moga.common.messages import GnssFixType, LocalizationEstimate, SensorBundle
 from moga.common.vehicle_params import VehicleParams
-from moga.map.hd_map import BoundaryType, HDMap, LaneType
+from moga.map.hd_map import BoundaryType, HDMap
 
 # compatibility of a detected line type with a map boundary type
 _TYPE_OK = {
@@ -133,7 +133,7 @@ class Localizer:
         self.estimate = LocalizationEstimate(
             t, float(x[IX]), float(x[IY]), float(x[IYAW]), float(max(x[IV], 0.0)),
             self.last_gyro - float(x[IBG]), ekf.P[:3, :3].copy(), self.lane_id,
-            valid=ekf.pos_std < 1.5)
+            valid=ekf.pos_std < 1.5, slip=-self.k_slip * self.last_ay)
         return self.estimate
 
     def _update_lane(self):

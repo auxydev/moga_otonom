@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from moga.map import library as maps
 from moga.scenarios.registry import gps_at, register
-from moga.sim.actors import LaneVehicle, Pedestrian, ScriptedEvent, StaticObstacle
+from moga.sim.actors import LaneVehicle, Pedestrian, ScriptedEvent
 from moga.sim.scenario import Criteria, EgoStart, Mission, Scenario
 
 

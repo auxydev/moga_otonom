@@ -142,6 +142,11 @@ class LocalizationEstimate:
     cov: np.ndarray          # (3,3) covariance of x, y, yaw
     lane_id: str | None = None
     valid: bool = True
+    slip: float = 0.0        # rear-axle sideslip: course over ground minus heading [rad]
+
+    @property
+    def course(self) -> float:
+        return self.yaw + self.slip
 
     @property
     def std_xy(self) -> float:
@@ -191,6 +196,7 @@ class TrackedObject:
     cov: np.ndarray = field(default_factory=lambda: np.eye(4))
     confirmed: bool = False
     lane_id: str | None = None
+    accel: float = 0.0          # longitudinal acceleration estimate [m/s^2]
 
     @property
     def speed(self) -> float:
@@ -217,6 +223,9 @@ class Trajectory:
     a: np.ndarray
     kappa: np.ndarray
     s: np.ndarray | None = None
+    frenet: dict | None = None      # planner-internal Frenet profiles (stitching)
+    ref_key: tuple | None = None    # reference line the Frenet profiles refer to
+    lat_end: tuple | None = None    # (s, d) end of a distance-based lateral manoeuvre
 
     def __len__(self) -> int:
         return len(self.t)

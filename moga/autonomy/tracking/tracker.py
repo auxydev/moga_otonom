@@ -4,9 +4,10 @@
   (state x, y, vx, vy), class-dependent process noise,
 * global nearest neighbour association with the Hungarian algorithm on the
   Mahalanobis distance (chi-square gating, class compatibility),
-* radar updates: position (weak) + range rate (Doppler) EKF update, Doppler
-  gating against static clutter, radar-only track initiation for moving
-  targets,
+* radar updates: range rate (Doppler) EKF update, plus position when the
+  LiDAR does not see the target; Doppler gating against static clutter,
+  radar-only track initiation for moving targets (reported beyond the
+  reliable LiDAR range only),
 * track management: tentative -> confirmed after M-of-N hits, deletion
   after coasting, box size smoothing, heading from velocity or box,
   class voting.
@@ -22,7 +23,7 @@ from scipy.optimize import linear_sum_assignment
 from moga.common.geometry import wrap_angle
 from moga.common.messages import DetectedObject, ObjectClass, RadarScan, TrackedObject
 
-ACC_SIGMA = {ObjectClass.CAR: 2.5, ObjectClass.TRUCK: 1.5, ObjectClass.PEDESTRIAN: 1.2,
+ACC_SIGMA = {ObjectClass.CAR: 2.5, ObjectClass.TRUCK: 1.5, ObjectClass.PEDESTRIAN: 3.0,
              ObjectClass.CYCLIST: 1.8, ObjectClass.STATIC: 0.2, ObjectClass.UNKNOWN: 2.0}
 VEHICLES = {ObjectClass.CAR, ObjectClass.TRUCK, ObjectClass.CYCLIST}
 GATE_POS = 13.8          # chi2(2) 99.9 %
@@ -47,6 +48,9 @@ class Track:
     confirmed: bool = False
     lidar_hits: int = 0
     radar_hits: int = 0
+    accel: float = 0.0             # filtered longitudinal acceleration estimate
+    last_lidar: float = 0.0
+    _v_prev: tuple | None = None
 
     @property
     def cls(self) -> ObjectClass:
@@ -69,6 +73,7 @@ class MultiObjectTracker:
         self.max_coast = max_coast
         self.max_coast_tent = max_coast_tentative
         self.t = None
+        self.ego_xy = None
 
     # ------------------------------------------------------------ predict
     def predict(self, t: float):
@@ -139,7 +144,7 @@ class MultiObjectTracker:
         for j, d in enumerate(dets):
             if j not in matched_d:
                 self._new_track(d, t, ego_xy)
-        self._manage(t)
+        self._manage(t, ego_xy)
 
     def _kf_update_lidar(self, tr: Track, d: DetectedObject, R: np.ndarray, H: np.ndarray, t: float):
         z = np.array([d.x, d.y])
@@ -163,6 +168,13 @@ class MultiObjectTracker:
         tr.hits += 1
         tr.lidar_hits += 1
         tr.last_update = t
+        tr.last_lidar = t
+        # longitudinal acceleration from the filtered speed (low-pass)
+        sp = tr.speed
+        if tr._v_prev is not None and t - tr._v_prev[0] > 0.05 and tr.lidar_hits > 3:
+            a_raw = (sp - tr._v_prev[1]) / (t - tr._v_prev[0])
+            tr.accel += 0.3 * (float(np.clip(a_raw, -10.0, 5.0)) - tr.accel)
+        tr._v_prev = (t, sp)
         tr.history.append(1)
         tr.history = tr.history[-self.confirm_n:]
 
@@ -178,12 +190,15 @@ class MultiObjectTracker:
                    {d.cls: 1.0}, 1, 0.0, t, t, [1])
         if d.source == "lidar":
             tr.lidar_hits = 1
+            tr.last_lidar = t
         else:
             tr.radar_hits = 1
         self.next_id += 1
         self.tracks.append(tr)
 
-    def _manage(self, t: float):
+    def _manage(self, t: float, ego_xy=None):
+        if ego_xy is not None:
+            self.ego_xy = ego_xy
         keep = []
         for tr in self.tracks:
             if not tr.confirmed and sum(tr.history) >= self.confirm_m:
@@ -191,6 +206,12 @@ class MultiObjectTracker:
             coast = t - tr.last_update
             limit = self.max_coast if tr.confirmed else self.max_coast_tent
             if coast > limit:
+                continue
+            # inside the LiDAR's reliable range a track must be confirmed by the
+            # LiDAR: radar alone (possibly static clutter) does not keep it alive
+            if tr.lidar_hits and ego_xy is not None and \
+                    math.hypot(tr.x[0] - ego_xy[0], tr.x[1] - ego_xy[1]) < 70.0 and \
+                    t - tr.last_lidar > (self.max_coast if tr.confirmed else self.max_coast_tent):
                 continue
             if np.trace(tr.P[:2, :2]) > 25.0:
                 continue
@@ -246,6 +267,22 @@ class MultiObjectTracker:
                 if m2 < best_m2:
                     best, best_m2 = tr, m2
             if best is not None:
+                if best.lidar_hits == 0 or t - best.last_lidar > 0.3:
+                    # not (or no longer) seen by the LiDAR, e.g. beyond its range:
+                    # position update with the radar (box centre behind the
+                    # reflecting surface)
+                    ext = 0.5 * max(best.length, best.width)
+                    z = np.array([px + ext * ux, py + ext * uy])
+                    sr = 0.3 + 0.5 * ext
+                    sc = max(det.range * math.radians(0.6), 0.3) + 0.5 * ext
+                    Rm = np.array([[ux, -uy], [uy, ux]])
+                    R = Rm @ np.diag([sr ** 2, sc ** 2]) @ Rm.T
+                    Hp = np.zeros((2, 4))
+                    Hp[0, 0] = Hp[1, 1] = 1.0
+                    S = best.P[:2, :2] + R
+                    K = best.P @ Hp.T @ np.linalg.inv(S)
+                    best.x = best.x + K @ (z - best.x[:2])
+                    best.P = (np.eye(4) - K @ Hp) @ best.P
                 # Doppler update: h(x) = vx*ux + vy*uy
                 Hr = np.array([[0.0, 0.0, ux, uy]])
                 S = (Hr @ best.P @ Hr.T).item() + 0.15 ** 2
@@ -260,18 +297,26 @@ class MultiObjectTracker:
                                    ObjectClass.UNKNOWN, 0.5, 0, "radar",
                                    ground_rr * ux, ground_rr * uy)
                 self._new_track(d, t, (ex, ey))
-        self._manage(t)
+        self._manage(t, (ex, ey))
 
     # ------------------------------------------------------------- output
     def output(self, confirmed_only: bool = True) -> list[TrackedObject]:
         out = []
         for tr in self.tracks:
-            if confirmed_only and not tr.confirmed:
-                continue
             if tr.lidar_hits == 0:
-                continue        # radar-only tracks are not reported until lidar confirms
-            out.append(TrackedObject(tr.id, float(tr.x[0]), float(tr.x[1]), float(tr.x[2]),
-                                     float(tr.x[3]), float(tr.yaw), tr.length, tr.width,
-                                     tr.height, tr.cls, tr.age, tr.hits, tr.P.copy(),
-                                     tr.confirmed))
+                # radar-only tracks are reported only beyond the range where the
+                # LiDAR reliably sees vehicles (long-range awareness, e.g. for
+                # oncoming traffic), when moving and consistently observed
+                far = self.ego_xy is not None and \
+                    math.hypot(tr.x[0] - self.ego_xy[0], tr.x[1] - self.ego_xy[1]) > 60.0
+                if not (far and tr.radar_hits >= 4 and tr.speed > 3.0
+                        and (self.t is None or self.t - tr.last_update < 0.25)):
+                    continue
+            elif confirmed_only and not tr.confirmed:
+                continue
+            obj = TrackedObject(tr.id, float(tr.x[0]), float(tr.x[1]), float(tr.x[2]),
+                                float(tr.x[3]), float(tr.yaw), tr.length, tr.width,
+                                tr.height, tr.cls, tr.age, tr.hits, tr.P.copy(), tr.confirmed)
+            obj.accel = tr.accel
+            out.append(obj)
         return out

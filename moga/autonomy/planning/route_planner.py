@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 

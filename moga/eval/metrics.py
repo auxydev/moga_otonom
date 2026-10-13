@@ -6,7 +6,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from moga.common.geometry import box_distance, wrap_angle
+from moga.common.geometry import box_corners, box_distance, wrap_angle
 from moga.sim.scenario import Criteria, Scenario
 from moga.sim.world import World
 
@@ -148,11 +148,17 @@ class MetricsTracker:
             loc = pose.to_local(np.array([[a.x, a.y]]))[0]
             if not (-30.0 < loc[0] < 60.0 and abs(loc[1]) < 15.0):
                 continue
-            best, bd = None, 2.5
+            # match by box proximity (a partially seen long truck may have a
+            # shifted centre while its visible faces are accurate)
+            best, bd, bscore = None, math.inf, 1.0
+            gt_box = a.footprint()
             for tr in tracks:
-                d = math.hypot(tr[0] - a.x, tr[1] - a.y)
-                if d < bd and tr[7] not in used:
-                    best, bd = tr, d
+                if tr[7] in used or math.hypot(tr[0] - a.x, tr[1] - a.y) > a.length + 5.0:
+                    continue
+                score = box_distance(box_corners(tr[0], tr[1], tr[2], tr[3], tr[4]), gt_box)
+                if score < bscore:
+                    best, bscore = tr, score
+                    bd = math.hypot(tr[0] - a.x, tr[1] - a.y)
             if best is None:
                 P["fn"] += 1
                 continue

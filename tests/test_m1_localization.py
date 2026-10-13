@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from moga.autonomy.localization.ekf import IBG, IK, IV, IX, IY, IYAW, PoseEKF
+from moga.autonomy.localization.ekf import IBG, IK, IX, IY, PoseEKF
 from moga.autonomy.planning.route_path import build_route_path, speed_profile
 from moga.autonomy.planning.route_planner import RoutePlanner
 from moga.map.library import highway_straight, loop_track, urban_grid

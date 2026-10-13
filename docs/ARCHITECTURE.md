@@ -33,6 +33,25 @@ Proje iki ana parçadan oluşur:
  └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Planlama ve kontrol hattı
+
+```
+GPS görevi ─► Rota planlama (A*, şerit grafı) ─► Rota takibi (zorunlu şerit değişimi, kalan yol)
+                                                        │
+Tahminler ─► Nesne akıl yürütme (Frenet: şerit başına boşluk/hız, durağan engel)
+                                                        │
+                       Davranış FSM: LANE_KEEP · PREPARE_LC · LANE_CHANGE · BLOCKED · BYPASS
+                                                        │  hedef ofsetler, hedef hızlar, durma noktaları
+                       Frenet kafes planlayıcı (aday üretimi → fizibilite → çarpışma/ST → maliyet)
+                                                        │  6 s yörünge (0.05 s çözünürlük)
+                       Yörünge kontrolcüsü (Stanley + hız/ivme ileri besleme)  ◄── AEB (bağımsız)
+```
+
+Planlayıcı her döngüde önceki planın Frenet durumundan dikiş yaparak başlar; uygun aday
+kalmazsa önceki yol üzerinde maksimum frenle durma yörüngesi üretilir (`EMERGENCY_STOP`).
+AEB izlerden ve ham LiDAR noktalarından bağımsız olarak çarpışma riskini değerlendirir ve
+planlayıcının çıktısını geçersiz kılabilir.
+
 ## Koordinat sistemleri
 
 | Çerçeve | Tanım |

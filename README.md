@@ -43,6 +43,9 @@ python scripts/run_scenario.py m1_urban_route --gif out/urban.gif --overview out
 # bir milestone'un tüm senaryoları + rapor
 python scripts/run_scenario.py --milestone M0 --driver oracle --report out/report.md
 
+# dokümantasyon görseli: seçilen anlardaki kareler
+python scripts/make_figures.py m4_rural_bypass 16 30.6 31.8 33.4 --columns 2 --view 70 -o out/bypass.png
+
 # testler (paralel)
 python -m pytest -q -n 4
 ```
@@ -55,7 +58,7 @@ python -m pytest -q -n 4
 | M1 – Lokalizasyon + GPS tabanlı sürüş | ✅ |
 | M2 – Kamera şerit algılama + şerit takibi | ✅ |
 | M3 – LiDAR/radar algılama + nesne takibi | ✅ |
-| M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ⏳ |
+| M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ✅ |
 | M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ⏳ |
 | M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ⏳ |
 
@@ -70,6 +73,8 @@ python -m pytest -q -n 4
 | ![](docs/images/m2_camera_rural.png) | ![](docs/images/m2_fusion_comparison.png) |
 | **M3 – LiDAR/radar nesne takibi + tahmin** | **M3 – ACC dur‑kalk** |
 | ![](docs/images/m3_highway_tracking.png) | ![](docs/images/m3_acc_stop_and_go.png) |
+| **M4 – boşluk bekle, sollama, sağa dönüş** | **M4 – karşı trafiği bekleyip engeli geçme** |
+| ![](docs/images/m4_overtake.png) | ![](docs/images/m4_rural_bypass.png) |
 
 ## Araç varsayımları
 

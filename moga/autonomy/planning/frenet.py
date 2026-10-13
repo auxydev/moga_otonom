@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from moga.common.geometry import Polyline
-from moga.common.messages import ObjectClass, PredictedObject, Trajectory
+from moga.common.messages import PredictedObject, Trajectory
 from moga.common.vehicle_params import VehicleParams
 
 
@@ -82,6 +82,15 @@ def poly_eval(c, t, T):
     return p, v, a, j
 
 
+def _clamp_stop(s_, sd, sdd):
+    for i in np.nonzero((sd < -0.05).any(axis=1))[0]:
+        k = int(np.argmax(sd[i] < 0.0))
+        s_[i, k:] = s_[i, k]
+        sd[i, k:] = 0.0
+        sdd[i, k:] = 0.0
+    return s_, sd, sdd
+
+
 # ----------------------------------------------------------------------------
 @dataclass
 class PlannerConfig:
@@ -90,19 +99,21 @@ class PlannerConfig:
     lat_times: tuple = (3.0, 4.0, 5.5)
     lon_times: tuple = (2.5, 4.0, 6.0)
     max_accel: float = 2.0
-    max_decel: float = 6.0
+    max_decel: float = 8.0          # emergency capable; strongly penalised above comfort
     comfort_decel: float = 3.0
-    max_lat_accel: float = 3.0
+    max_lat_accel: float = 2.6
     max_curvature: float = 0.22
     # cost weights
     w_lat_jerk: float = 0.05
     w_lon_jerk: float = 0.02
     w_d_target: float = 2.0
     w_v: float = 0.6
-    w_t: float = 0.3
+    w_t: float = 0.08
+    w_d_int: float = 3.0          # lateral deviation over the horizon
     w_prox: float = 6.0
     w_lane_change: float = 4.0
     w_decel: float = 0.4
+    w_gap: float = 0.5
     safety_margin: float = 0.35   # lateral circle inflation [m]
     lon_margin: float = 1.0       # extra longitudinal buffer for vehicles
 
@@ -127,6 +138,32 @@ class PlanResult:
 
 
 class FrenetPlanner:
+    def _render(self, ref: Polyline, start: dict, lat, lat_c, lon_c, lon_T, t0: float,
+                dt: float = 0.05) -> Trajectory:
+        """Evaluate the selected candidate at a fine time step for tracking."""
+        ts = np.arange(0.0, self.cfg.horizon + 1e-9, dt)
+        S, SD, SDD, _ = poly_eval(lon_c[None, :], ts, np.array([lon_T]))
+        S, SD, SDD = _clamp_stop(S, SD, SDD)
+        S, SD, SDD = S[0], SD[0], SDD[0]
+        dT, par, sb = lat
+        if sb:
+            d, dp, dpp, _ = poly_eval(lat_c[None, :], S - start["s"], np.array([par]))
+            D, DV = d[0], dp[0] * SD
+            DA = dpp[0] * SD ** 2 + dp[0] * SDD
+        else:
+            d, dv, da, _ = poly_eval(lat_c[None, :], ts, np.array([par]))
+            D, DV, DA = d[0], dv[0], da[0]
+        x, y, ryaw = ref.to_cartesian(S, D)
+        _, _, _, rk = ref.interpolate(S)
+        yaw = np.unwrap(ryaw + np.arctan2(DV, np.maximum(SD, 0.05) * (1.0 - rk * D)))
+        ds = np.hypot(np.gradient(x), np.gradient(y))
+        kap = np.where(ds < 0.01, rk, np.gradient(yaw) / np.maximum(ds, 1e-3))
+        traj = Trajectory(t0, ts, x, y, np.arctan2(np.sin(yaw), np.cos(yaw)), SD, SDD, kap, S)
+        traj.frenet = {"s": S, "s_d": SD, "s_dd": SDD, "d": D, "d_d": DV, "d_dd": DA}
+        if sb:
+            traj.lat_end = (start["s"] + par, dT)
+        return traj
+
     def __init__(self, params: VehicleParams, cfg: PlannerConfig | None = None):
         self.p = params
         self.cfg = cfg or PlannerConfig()
@@ -140,7 +177,7 @@ class FrenetPlanner:
 
     # ------------------------------------------------------------ helpers
     @staticmethod
-    def _object_circles(pr: PredictedObject, ts: np.ndarray):
+    def _object_circles(pr: PredictedObject, ts: np.ndarray, age: float = 0.0):
         """Object footprints over time as circles: centres (M, T, 2) + radius,
         for each prediction mode with its probability."""
         tr = pr.track
@@ -151,7 +188,7 @@ class FrenetPlanner:
         r = math.hypot(seg / 2, W / 2)
         out = []
         for prob, traj in pr.modes:
-            tt = np.arange(len(traj)) * pr.dt
+            tt = np.arange(len(traj)) * pr.dt - age      # prediction starts at the track time
             x = np.interp(ts, tt, traj[:, 0])
             y = np.interp(ts, tt, traj[:, 1])
             yaw = np.interp(ts, tt, np.unwrap(traj[:, 2]))
@@ -164,24 +201,43 @@ class FrenetPlanner:
     def plan(self, ref: Polyline, start: dict, d_targets: list[float], d_preferred: float,
              long_targets: list[LongTarget], preds: list[PredictedObject],
              d_bounds: tuple[float, float], v_limit_fn, t0: float,
-             obstacle_cls_margin: dict | None = None, s_based: bool | None = None) -> PlanResult:
+             obstacle_cls_margin: dict | None = None, s_based: bool | None = None,
+             pred_age: float = 0.0, lon_obstacles: list | None = None,
+             time_gap: float = 1.6, standstill_gap: float = 4.0,
+             ignore_ids: set | None = None, id_margin: dict | None = None,
+             lat_dists: tuple | None = None, lat_anchor: tuple | None = None) -> PlanResult:
         """``start``: dict with s, s_d, s_dd, d, d_d, d_dd (Frenet state).
         ``d_targets``: lateral end offsets to sample; ``d_preferred``: the
         behaviour's lateral goal (cost reference).  ``v_limit_fn(s)`` returns the
-        admissible speed along the reference line."""
+        admissible speed along the reference line.  ``lat_anchor`` = (s_end,
+        d_end) of the previously selected distance-based lateral manoeuvre: it
+        is offered again with its original end point, so that replanning does
+        not keep postponing the lateral motion."""
         cfg = self.cfg
         ts = self.ts
         nT = len(ts)
         v0 = max(start["s_d"], 0.0)
+        # (e.g. after an AEB intervention the measured deceleration exceeds the planner limits)
+        start = dict(start)
+        start["s_dd"] = float(np.clip(start["s_dd"], -cfg.max_decel, cfg.max_accel))
         if s_based is None:
             s_based = v0 < 4.0
 
         # ---------------- longitudinal candidates
-        lon_c, lon_T, lon_kind, lon_goal = [], [], [], []
+        lon_c, lon_T = [], []
         for lt in long_targets:
-            for T in cfg.lon_times:
+            times = list(cfg.lon_times)
+            if lt.kind == "stop" and lt.s > start["s"] + 0.5 and v0 > 0.5:
+                # natural stopping profiles (may extend beyond the horizon) so that a
+                # smooth stop is always available well before the stop point
+                T_nat = 2.0 * (lt.s - start["s"]) / v0
+                times += [T_nat * f for f in (1.0, 1.25, 1.6) if 1.0 < T_nat * f < 40.0]
+            for T in times:
                 if lt.kind == "cruise":
-                    c = quartic_coeffs(start["s"], v0, start["s_dd"], lt.v, 0.0, np.array([T]))[0]
+                    # reachable end speed for this horizon (quartic peak accel ~1.5x mean)
+                    v1 = float(np.clip(lt.v, v0 - cfg.comfort_decel * T / 1.5,
+                                       v0 + cfg.max_accel * T / 1.5))
+                    c = quartic_coeffs(start["s"], v0, start["s_dd"], v1, 0.0, np.array([T]))[0]
                 else:
                     if lt.s <= start["s"] + 0.05:
                         # already at / beyond the stop point: hard stop
@@ -195,31 +251,32 @@ class FrenetPlanner:
                                            np.array([T]))[0]
                 lon_c.append(c)
                 lon_T.append(T)
-                lon_kind.append(lt.kind)
-                lon_goal.append(lt.v)
+        if v0 < 0.3:
+            # (nearly) standing: holding the position is always an option
+            lon_c.append(np.array([start["s"], 0.0, 0.0, 0.0, 0.0, 0.0]))
+            lon_T.append(1.0)
         lon_c = np.array(lon_c)
         lon_T = np.array(lon_T)
         s_, sd, sdd, sddd = poly_eval(lon_c, ts, lon_T)
-        # stopping profiles must not reverse
-        sd_neg = sd < -0.05
-        if sd_neg.any():
-            # clamp: once the speed hits zero, stay
-            for i in np.nonzero(sd_neg.any(axis=1))[0]:
-                k = int(np.argmax(sd[i] < 0.0))
-                s_[i, k:] = s_[i, k]
-                sd[i, k:] = 0.0
-                sdd[i, k:] = 0.0
-                sddd[i, k:] = 0.0
+        # stopping profiles must not reverse: once the speed hits zero, stay
+        for i in np.nonzero((sd < -0.05).any(axis=1))[0]:
+            k = int(np.argmax(sd[i] < 0.0))
+            sddd[i, k:] = 0.0
+        s_, sd, sdd = _clamp_stop(s_, sd, sdd)
 
         # ---------------- lateral candidates
-        lat_d, lat_dd, lat_ddd, lat_info = [], [], [], []
+        lat_info = []
         for dT in d_targets:
             if s_based:
-                for ds in (12.0, 20.0, 30.0):
+                for ds in (lat_dists or (12.0, 20.0, 30.0)):
                     lat_info.append((dT, ds, True))
             else:
                 for T in cfg.lat_times:
                     lat_info.append((dT, T, False))
+        if s_based and lat_anchor is not None:
+            ds = lat_anchor[0] - start["s"]
+            if ds > 3.0 and any(abs(lat_anchor[1] - dT) < 0.05 for dT in d_targets):
+                lat_info.append((lat_anchor[1], ds, True))
         # ---------------- combine (Cartesian product)
         nL, nS = len(lat_info), len(lon_c)
         K = nL * nS
@@ -230,49 +287,64 @@ class FrenetPlanner:
         SDD = sdd[si]
         SDDD = sddd[si]
         D = np.empty((K, nT))
+        DV = np.empty((K, nT))
         DJ = np.empty((K, nT))
+        lat_coef = []
         for k, (dT, par, sb) in enumerate(lat_info):
             rows = li == k
             if sb:
-                # d as a function of travelled distance
-                c = quintic_coeffs(start["d"], start["d_d"] / max(v0, 0.5) if v0 > 0.5 else 0.0,
-                                   0.0, dT, 0.0, 0.0, np.array([par]))[0]
+                # d as a function of travelled distance: d' = d_dot / s_dot,
+                # d'' = (d_ddot - d' s_ddot) / s_dot^2
+                dp0 = start["d_d"] / v0 if v0 > 0.5 else 0.0
+                dpp0 = (start["d_dd"] - dp0 * start["s_dd"]) / (v0 * v0) if v0 > 1.0 else 0.0
+                dpp0 = float(np.clip(dpp0, -0.3, 0.3))
+                c = quintic_coeffs(start["d"], dp0, dpp0, dT, 0.0, 0.0, np.array([par]))[0]
+                lat_coef.append(c)
                 prog = S[rows] - start["s"]
-                p, _, _, _ = poly_eval(c[None, :], prog.ravel(), np.array([par]))
+                p, dp, _, _ = poly_eval(c[None, :], prog.ravel(), np.array([par]))
                 # poly_eval holds after T with constant slope (=0 at end)
                 D[rows] = p.reshape(prog.shape)
+                DV[rows] = dp.reshape(prog.shape) * SD[rows]      # dd/dt = d'(s) * s_dot
                 DJ[rows] = 0.0
             else:
                 c = quintic_coeffs(start["d"], start["d_d"], start["d_dd"], dT, 0.0, 0.0,
                                    np.array([par]))[0]
+                lat_coef.append(c)
                 p, v, a, j = poly_eval(c[None, :], ts, np.array([par]))
                 D[rows] = p[0]
+                DV[rows] = v[0]
                 DJ[rows] = j[0]
         # ---------------- to Cartesian
         x, y, ryaw = ref.to_cartesian(S.ravel(), D.ravel())
+        _, _, _, rkap = ref.interpolate(S.ravel())
         X = x.reshape(K, nT)
         Y = y.reshape(K, nT)
+        RK = rkap.reshape(K, nT)
+        # heading from the Frenet derivatives (finite differences of positions
+        # would lag by half a step and create a spurious lateral velocity)
+        YAW = ryaw.reshape(K, nT) + np.arctan2(DV, np.maximum(SD, 0.05) * (1.0 - RK * D))
+        YAW = np.unwrap(YAW, axis=1)
         dX = np.gradient(X, axis=1)
         dY = np.gradient(Y, axis=1)
-        YAW = np.arctan2(dY, dX)
-        # for (near) standstill use the reference heading
-        still = np.hypot(dX, dY) < 1e-3
-        YAW = np.where(still, ryaw.reshape(K, nT), YAW)
-        YAW = np.unwrap(YAW, axis=1)
         dist = np.hypot(dX, dY)
         KAP = np.gradient(YAW, axis=1) / np.maximum(dist, 1e-3)
-        KAP = np.where(dist < 0.02, 0.0, KAP)
+        KAP = np.where(dist < 0.02, RK, KAP)
         # ---------------- feasibility
         feas = np.ones(K, dtype=bool)
         feas &= SDD.max(axis=1) <= cfg.max_accel + 0.3
         feas &= SDD.min(axis=1) >= -cfg.max_decel - 0.3
         feas &= (np.abs(KAP) * (SD > 1.0)).max(axis=1) <= cfg.max_curvature
         lat_acc = SD ** 2 * np.abs(KAP)
-        feas &= lat_acc.max(axis=1) <= cfg.max_lat_accel + 0.5
-        feas &= (D.min(axis=1) >= d_bounds[0]) & (D.max(axis=1) <= d_bounds[1])
+        feas &= lat_acc.max(axis=1) <= cfg.max_lat_accel + 0.3
+        # lateral corridor (relaxed around the start offset so that a vehicle
+        # outside the corridor can always steer back into it)
+        lo_b = min(d_bounds[0], start["d"] - 0.2)
+        hi_b = max(d_bounds[1], start["d"] + 0.2)
+        feas &= (D.min(axis=1) >= lo_b) & (D.max(axis=1) <= hi_b)
+        feas &= (D[:, -1] >= d_bounds[0] - 0.05) & (D[:, -1] <= d_bounds[1] + 0.05)
         vlim = v_limit_fn(S)
         over = np.maximum(SD - vlim, 0.0)
-        feas &= over.max(axis=1) < 1.5
+        feas &= (over - np.maximum(0.3, 0.05 * vlim)).max(axis=1) < 0.0
         # ---------------- collision checking
         coll = np.zeros(K, dtype=bool)
         prox = np.zeros(K)
@@ -283,12 +355,14 @@ class FrenetPlanner:
         margins = obstacle_cls_margin or {}
         for pr in preds:
             tr = pr.track
+            if ignore_ids and tr.id in ignore_ids:
+                continue
             # quick reject
             dmin0 = np.hypot(X[:, 0] - tr.x, Y[:, 0] - tr.y).min()
             if dmin0 > 120.0:
                 continue
-            extra = margins.get(tr.cls, 0.0)
-            for prob, centers, r in self._object_circles(pr, ts):
+            extra = margins.get(tr.cls, 0.0) + (id_margin or {}).get(tr.id, 0.0)
+            for prob, centers, r in self._object_circles(pr, ts, pred_age):
                 if prob < 0.1:
                     continue
                 # (K, T, nE, nO)
@@ -296,24 +370,55 @@ class FrenetPlanner:
                 dyc = ego_cy[..., :, None] - centers[None, :, None, :, 1]
                 dd = np.sqrt(dxc ** 2 + dyc ** 2).min(axis=(2, 3))
                 clearance = dd - (self.circle_r + r)
-                hit = (clearance < cfg.safety_margin + extra).any(axis=1)
+                # hard: base margin (+ half of the class / object specific extra); if we
+                # are already closer at t=0 (e.g. while passing), we must not get closer
+                thr = np.minimum(cfg.safety_margin + 0.5 * extra,
+                                 np.maximum(clearance[:, :1] - 0.05, 0.0))
+                hit = (clearance < thr).any(axis=1)
                 coll |= hit & (prob >= 0.2)
                 prox += prob * np.exp(-np.maximum(clearance, 0.0) / 1.5).sum(axis=1) * cfg.dt
+                # soft: keep the full extra clearance when possible
+                prox += 3.0 * prob * (np.maximum(cfg.safety_margin + extra - clearance, 0.0) ** 2).sum(axis=1) * cfg.dt
+        # ---------------- longitudinal (ST) constraints w.r.t. objects in the corridor
+        gap_cost = np.zeros(K)
+        if lon_obstacles:
+            front = self.p.front_bumper
+            for ob in lon_obstacles:
+                s_rear = ob["s_rear"] + ob["v"] * (ts + pred_age * 0.0)
+                overlap = np.abs(D - ob["d"]) < ob["half_w"] + 0.5 * self.p.width + 0.25
+                gap = s_rear[None, :] - (S + front)
+                need_hard = 1.0 + 0.25 * SD
+                need_soft = standstill_gap + time_gap * SD
+                ahead = gap > -2.0      # objects we have already passed are handled by collision checks
+                viol = overlap & ahead & (gap < need_hard)
+                coll |= viol.any(axis=1)
+                short = np.where(overlap & ahead, np.maximum(need_soft - gap, 0.0), 0.0)
+                gap_cost += (short ** 2).mean(axis=1)
         valid = feas & ~coll
         # ---------------- costs
         jl = (DJ ** 2).sum(axis=1) * cfg.dt
         jlon = (SDDD ** 2).sum(axis=1) * cfg.dt
         d_end = D[:, -1]
         lat_T = np.array([lat_info[k][1] for k in li])
-        v_goal = np.array([lon_goal[k] for k in si])
-        kinds = np.array([lon_kind[k] for k in si])
-        v_end = SD[:, -1]
+        # progress: speed deficit w.r.t. an "ideal" time profile that accelerates
+        # comfortably and respects the admissible speed along the reference
+        v_ref = np.empty(nT)
+        sr, vr = start["s"], v0
+        for i in range(nT):
+            v_ref[i] = vr
+            vr = min(float(v_limit_fn(np.array([sr + vr * cfg.dt]))[0]), vr + cfg.max_accel * 0.75 * cfg.dt)
+            vr = max(vr, 0.0)
+            sr += vr * cfg.dt
+        deficit = np.maximum(v_ref[None, :] - SD, 0.0)
         cost = (cfg.w_lat_jerk * jl + cfg.w_lon_jerk * jlon
                 + cfg.w_d_target * (d_end - d_preferred) ** 2
-                + cfg.w_v * (v_end - v_goal) ** 2 * (kinds == "cruise")
-                + cfg.w_t * lat_T * 0.1
+                + cfg.w_v * (deficit ** 2).mean(axis=1)
+                + cfg.w_t * lat_T
+                + cfg.w_d_int * ((D - d_preferred) ** 2).mean(axis=1)
                 + cfg.w_prox * prox
                 + cfg.w_decel * np.maximum(-SDD, 0.0).mean(axis=1)
+                + 4.0 * (np.maximum(-SDD - cfg.comfort_decel - 0.5, 0.0) ** 2).mean(axis=1)
+                + cfg.w_gap * gap_cost
                 + 0.5 * over.sum(axis=1) * cfg.dt)
         res = PlanResult(None, False, n_candidates=K, n_feasible=int(valid.sum()))
         if not valid.any():
@@ -322,9 +427,8 @@ class FrenetPlanner:
             return res
         cost = np.where(valid, cost, np.inf)
         k = int(np.argmin(cost))
-        traj = Trajectory(t0, ts.copy(), X[k].copy(), Y[k].copy(),
-                          np.arctan2(np.sin(YAW[k]), np.cos(YAW[k])), SD[k].copy(), SDD[k].copy(),
-                          KAP[k].copy(), S[k].copy())
+        traj = self._render(ref, start, lat_info[li[k]], lat_coef[li[k]], lon_c[si[k]],
+                            lon_T[si[k]], t0)
         res.trajectory = traj
         res.ok = True
         res.cost = float(cost[k])

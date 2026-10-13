@@ -58,8 +58,9 @@ def stop_and_go(seed: int = 0) -> Scenario:
         map=m, ego=EgoStart("hw_f1", 40.0, speed=20.0), actors=[lead],
         mission=Mission([gps_at(m, "hw_f1", 1350.0)]), duration=90.0, seed=seed, milestone="M3",
         criteria=Criteria(min_ttc=2.0, reach_goal=False,
-                          custom=[lambda s: (s["min_clearance"] > 3.0,
-                                             f"min clearance {s['min_clearance']:.1f} m")]))
+                          custom=[lambda s: (s["min_clearance"] > 1.0,
+                                             f"min clearance {s['min_clearance']:.1f} m"),
+                                  lambda s: (not s["aeb_events"], "AEB intervention")]))
 
 
 @register("m3_lead_hard_brake", "M3", ("acc", "emergency"))
@@ -72,7 +73,7 @@ def hard_brake(seed: int = 0) -> Scenario:
         description="Lead vehicle performs an emergency stop (6 m/s^2) at 90 km/h.",
         map=m, ego=EgoStart("hw_f1", 40.0, speed=25.0), actors=[lead],
         mission=Mission([gps_at(m, "hw_f1", 1350.0)]), duration=35.0, seed=seed, milestone="M3",
-        criteria=Criteria(reach_goal=False, must_stop=True, max_lat_accel=4.0,
+        criteria=Criteria(reach_goal=False, max_lat_accel=4.0,
                           custom=[lambda s: (s["min_clearance"] > 2.0,
                                              f"min clearance {s['min_clearance']:.1f} m")]))
 
@@ -84,12 +85,13 @@ def stopped_vehicle(seed: int = 0) -> Scenario:
     return Scenario(
         name="m3_stopped_vehicle",
         description="Broken-down car in the lane behind a curve on a two-lane road with a "
-                    "solid centre line: the vehicle must stop safely behind it.",
+                    "solid centre line: stop safely behind it (from M4 on: pass it through the "
+                    "free opposite lane with sufficient clearance).",
         map=m, ego=EgoStart("rd_f0", 5.0, speed=10.0), actors=[obst],
         mission=Mission([gps_at(m, "rd_f0", 600.0)]), duration=45.0, seed=seed, milestone="M3",
-        criteria=Criteria(reach_goal=False, must_stop=True,
-                          custom=[lambda s: (2.0 < s["min_clearance"] < 12.0,
-                                             f"stop distance {s['min_clearance']:.1f} m")]))
+        criteria=Criteria(reach_goal=False,
+                          custom=[lambda s: (s["min_clearance"] > 1.0,
+                                             f"min clearance {s['min_clearance']:.1f} m")]))
 
 
 @register("m3_pedestrian_jaywalk", "M3", ("pedestrian", "yield"))

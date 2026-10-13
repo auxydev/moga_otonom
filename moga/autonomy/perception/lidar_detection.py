@@ -27,7 +27,7 @@ class LidarDetectorConfig:
     ground_tol: float = 0.18
     min_z: float = 0.25
     max_z: float = 3.8
-    max_range: float = 80.0
+    max_range: float = 120.0
     cell: float = 0.3
     min_points: int = 4
     road_margin: float = 5.0      # m beyond the lane edges (sidewalks)
@@ -159,7 +159,9 @@ class LidarDetector:
         close to the sensor because distant objects are hit by few beams."""
         big = max(along, across)
         height_ok = rng < 30.0
-        if along > 6.5 or (height_ok and height > 2.7 and big > 2.0):
+        # a tall observation is reliable at any range (points cannot be higher
+        # than the object); low observed heights are only trusted nearby
+        if along > 6.5 or (height > 2.7 and big > 1.5):
             return ObjectClass.TRUCK
         if across >= 1.3 or along >= 2.6:
             return ObjectClass.CAR
@@ -305,6 +307,10 @@ class LidarDetector:
             if la > 25.0:                       # walls, guard rails
                 continue
             cls = self.classify(la, lb, h, rng, lane_h is not None)
+            if rng > 50.0 and len(idx) < 15 and cls == ObjectClass.PEDESTRIAN:
+                # too few distant points to tell a pedestrian from a partially
+                # seen vehicle: leave it to the tracker's class voting
+                cls = ObjectClass.UNKNOWN
             th = float(wrap_angle(th))
             if lane_h is not None:
                 if abs(wrap_angle(th - wrap_angle(lane_h - ego_yaw))) > math.pi / 2:
