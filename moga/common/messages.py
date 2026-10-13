@@ -123,6 +123,13 @@ class SensorBundle:
     vehicle: VehicleStatus | None = None
 
 
+@dataclass
+class Mission:
+    """GNSS mission: ordered (lat, lon) waypoints; the last one is the destination."""
+    waypoints: list[tuple[float, float]]
+    stop_at_goal: bool = True
+
+
 # ------------------------------------------------------- autonomy internal
 @dataclass
 class LocalizationEstimate:

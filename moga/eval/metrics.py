@@ -31,13 +31,15 @@ class MetricsTracker:
         self.lane_d: list[float] = []
         self.lane_d_t: list[float] = []
         self.loc_err: list[float] = []
+        self.loc_t: list[float] = []
+        self.loc_std: list[float] = []
         self.loc_yaw_err: list[float] = []
         self.mrm_events: list[tuple[float, str]] = []
         self.aeb_events: list[float] = []
         self.modes: list[tuple[float, str]] = []
 
     # ------------------------------------------------------------------
-    def update(self, debug: dict | None):
+    def update(self, debug: dict | None, pose_at_sense=None):
         w = self.world
         ego = w.ego
         st = ego.state
@@ -58,10 +60,11 @@ class MetricsTracker:
         debug = debug or {}
         loc = debug.get("loc")
         if loc is not None:
-            ex = loc[0] - pose.x
-            ey = loc[1] - pose.y
-            self.loc_err.append(math.hypot(ex, ey))
-            self.loc_yaw_err.append(abs(float(wrap_angle(loc[2] - pose.yaw))))
+            ref = pose_at_sense if pose_at_sense is not None else pose
+            self.loc_err.append(math.hypot(loc[0] - ref.x, loc[1] - ref.y))
+            self.loc_t.append(t)
+            self.loc_std.append(debug.get("loc_std", float("nan")))
+            self.loc_yaw_err.append(abs(float(wrap_angle(loc[2] - ref.yaw))))
         mode = debug.get("mode")
         if mode is not None and (not self.modes or self.modes[-1][1] != mode):
             self.modes.append((t, mode))
@@ -88,14 +91,14 @@ class MetricsTracker:
         hdt = self.SLOW_EVERY * w.dt
         # lane assignment of ego (ground truth)
         m = w.map.best_match(pose.x, pose.y, pose.yaw, max_dist=6.0)
-        if m is not None:
+        if m is not None and int(w.last_cmd.turn_signal) == 0 and not w.last_cmd.hazard_lights:
             lane = w.map.lanes[m.lane_id]
             cx, cy = pose.offset(ego.p.center_offset)
             s_c, d_c = lane.centerline.project(np.array([cx, cy]))
             self.lane_d.append(d_c)
             self.lane_d_t.append(t)
-            if ego.speed > lane.speed_limit * 1.05 + 0.5:
-                self.speeding_time += hdt
+        if m is not None and ego.speed > w.map.lanes[m.lane_id].speed_limit * 1.05 + 0.5:
+            self.speeding_time += hdt
         # off-road check of the body corners
         fp = ego.footprint()
         if not np.all(w.map.on_road(fp, margin=0.25)):
@@ -194,6 +197,9 @@ class MetricsTracker:
             s["loc_rmse"] = float(np.sqrt(np.mean(e ** 2)))
             s["loc_max"] = float(np.max(e))
             s["loc_yaw_rmse_deg"] = float(np.degrees(np.sqrt(np.mean(np.square(self.loc_yaw_err)))))
+            self.log["loc_t"] = self.loc_t
+            self.log["loc_err"] = self.loc_err
+            self.log["loc_std"] = self.loc_std
         return s
 
 

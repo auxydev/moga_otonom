@@ -71,10 +71,9 @@ def build_world(scn: Scenario, params: VehicleParams = MOGA) -> World:
     return world
 
 
-def default_sensors(world: World, seed: int) -> SensorSuite:
-    """Full sensor set (camera / lidar / radar are added as they become available)."""
+def default_sensors(world: World, seed: int, config: dict | None = None) -> SensorSuite:
     from moga.sim.sensors import make_sensor_suite
-    return make_sensor_suite(world, seed)
+    return make_sensor_suite(world, seed, config)
 
 
 class Simulation:
@@ -86,8 +85,9 @@ class Simulation:
         self.params = params
         self.world = build_world(scenario, params)
         if sensors is None:
-            sensors = default_sensors
-        self.sensors = sensors(self.world, scenario.seed) if callable(sensors) else sensors
+            self.sensors = default_sensors(self.world, scenario.seed, scenario.sensor_config)
+        else:
+            self.sensors = sensors(self.world, scenario.seed) if callable(sensors) else sensors
         self.driver = driver
         if driver.privileged:
             driver.attach_world(self.world)
@@ -132,12 +132,13 @@ class Simulation:
         end_at = None
         for k in range(n_steps):
             bundle = self.sensors.read(w)
+            pose_at_sense = w.ego.pose          # ground truth matching the sensor timestamp
             t0 = time.perf_counter()
             cmd = self.driver.step(bundle)
             driver_times.append(time.perf_counter() - t0)
             w.step(cmd)
             debug = self.driver.debug()
-            self.metrics.update(debug)
+            self.metrics.update(debug, pose_at_sense)
             if frame_every is not None and k % frame_every == 0:
                 snap = self._snapshot(debug)
                 if self.frame_hook is not None:

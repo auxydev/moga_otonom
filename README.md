@@ -38,7 +38,7 @@ pip install -r requirements.txt
 python scripts/run_scenario.py --list
 
 # tek senaryo + GIF / genel bakış görseli
-python scripts/run_scenario.py m0_urban_lights --driver oracle --gif out/urban.gif --overview out/urban.png
+python scripts/run_scenario.py m1_urban_route --gif out/urban.gif --overview out/urban.png
 
 # bir milestone'un tüm senaryoları + rapor
 python scripts/run_scenario.py --milestone M0 --driver oracle --report out/report.md
@@ -52,7 +52,7 @@ python -m pytest -q
 | Milestone | Durum |
 |-----------|-------|
 | M0 – Simülatör çekirdeği | ✅ |
-| M1 – Lokalizasyon + GPS tabanlı sürüş | ⏳ |
+| M1 – Lokalizasyon + GPS tabanlı sürüş | ✅ |
 | M2 – Kamera şerit algılama + şerit takibi | ⏳ |
 | M3 – LiDAR/radar algılama + nesne takibi | ⏳ |
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ⏳ |
@@ -64,6 +64,8 @@ python -m pytest -q
 | M0 – otoyol trafiği (oracle) | M0 – sinyalize şehir ızgarası |
 |---|---|
 | ![](docs/images/m0_highway.png) | ![](docs/images/m0_urban_overview.png) |
+| **M1 – GPS görevi, şerit seviyesinde rota** | **M1 – tünelde ölü hesap (GNSS yok)** |
+| ![](docs/images/m1_urban_route.png) | ![](docs/images/m1_tunnel_localization.png) |
 
 ## Araç varsayımları
 

@@ -1,6 +1,6 @@
 """Scenario library.  Importing this package registers all scenarios."""
 from moga.scenarios.registry import REGISTRY, ScenarioEntry, gps_at, register  # noqa: F401
-from moga.scenarios import m0  # noqa: F401,E402
+from moga.scenarios import m0, m1  # noqa: F401,E402
 
 
 def get(name: str, seed: int = 0):

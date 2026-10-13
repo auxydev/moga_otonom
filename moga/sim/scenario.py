@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from moga.common.messages import Mission  # noqa: F401  (re-exported)
 from moga.map.hd_map import HDMap
 from moga.sim.actors import Actor, SceneryBox
 from moga.sim.world import Weather
@@ -17,13 +18,6 @@ class EgoStart:
     d: float = 0.0
     speed: float = 0.0
     soc: float = 0.85
-
-
-@dataclass
-class Mission:
-    """GNSS mission: ordered (lat, lon) waypoints; the last one is the destination."""
-    waypoints: list[tuple[float, float]]
-    stop_at_goal: bool = True
 
 
 @dataclass
@@ -63,5 +57,6 @@ class Scenario:
     criteria: Criteria = field(default_factory=Criteria)
     milestone: str = "M0"
     stack_config: dict = field(default_factory=dict)
+    sensor_config: dict = field(default_factory=dict)
     end_on_goal: bool = True
     tags: tuple[str, ...] = ()
