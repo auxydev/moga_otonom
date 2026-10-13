@@ -7,6 +7,8 @@ from moga.sim.sensors.base import Sensor, SensorSuite, VehicleStatusSensor
 from moga.sim.sensors.camera import CameraConfig, CameraModel, CameraSensor
 from moga.sim.sensors.gnss import GnssConfig, GnssSensor, GnssZone
 from moga.sim.sensors.inertial import ImuConfig, ImuSensor, WheelConfig, WheelSensor
+from moga.sim.sensors.lidar import LidarConfig, LidarSensor
+from moga.sim.sensors.radar import RadarConfig, RadarSensor
 
 
 def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> SensorSuite:
@@ -24,10 +26,13 @@ def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> Senso
         WheelSensor(config.get("wheel", WheelConfig()), rngs[2]),
         GnssSensor(world, config.get("gnss", GnssConfig()), rngs[3]),
         CameraSensor(world, config.get("camera", CameraConfig()), rngs[4]),
+        LidarSensor(world, config.get("lidar", LidarConfig()), rngs[5]),
+        RadarSensor(world, config.get("radar", RadarConfig()), rngs[6]),
     ]
     disabled = set(config.get("disable", ()))
     return SensorSuite([s for s in sensors if s.name not in disabled])
 
 
 __all__ = ["Sensor", "SensorSuite", "VehicleStatusSensor", "make_sensor_suite", "GnssConfig",
-           "GnssZone", "ImuConfig", "WheelConfig", "CameraConfig", "CameraModel"]
+           "GnssZone", "ImuConfig", "WheelConfig", "CameraConfig", "CameraModel",
+           "LidarConfig", "RadarConfig"]

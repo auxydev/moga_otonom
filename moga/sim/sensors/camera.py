@@ -206,16 +206,20 @@ def _marking_samples(btype: BoundaryType, line: Polyline, spacing: float = 0.1):
     return [(p, tan, np.full(len(s), 0.075), np.full(len(s), 210.0))]
 
 
-_APPEARANCE_CACHE: dict[int, MapAppearance] = {}
+_APPEARANCE_CACHE: list[tuple[HDMap, MapAppearance]] = []
 
 
 def map_appearance(hd_map: HDMap) -> MapAppearance:
-    key = id(hd_map)
-    if key not in _APPEARANCE_CACHE:
-        if len(_APPEARANCE_CACHE) > 4:
-            _APPEARANCE_CACHE.clear()
-        _APPEARANCE_CACHE[key] = MapAppearance(hd_map)
-    return _APPEARANCE_CACHE[key]
+    """Appearance data per map object.  The cache keeps a reference to the map
+    itself (an ``id()`` key could be reused by a new map after GC)."""
+    for m, app in _APPEARANCE_CACHE:
+        if m is hd_map:
+            return app
+    if len(_APPEARANCE_CACHE) >= 4:
+        _APPEARANCE_CACHE.pop(0)
+    app = MapAppearance(hd_map)
+    _APPEARANCE_CACHE.append((hd_map, app))
+    return app
 
 
 @dataclass

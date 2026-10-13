@@ -16,6 +16,8 @@ from moga.autonomy.control.controllers import (CameraLaneKeeper, LongitudinalCon
                                                PurePursuitController, StanleyController)
 from moga.autonomy.localization.localizer import Localizer
 from moga.autonomy.perception.lane_detection import LaneDetection, LaneDetector
+from moga.autonomy.perception.object_pipeline import ObjectPerception
+from moga.autonomy.planning.object_reasoning import idm_accel, path_obstacles
 from moga.autonomy.planning.route_path import RoutePath, build_route_path, speed_profile
 from moga.autonomy.planning.route_planner import Route, RoutePlanner, RouteStep
 from moga.common.messages import ControlCommand, Mission, SensorBundle, TurnSignal
@@ -35,6 +37,10 @@ class StackConfig:
     open_route_length: float = 2500.0
     use_camera_lanes: bool = True    # camera lane detection + lane-relative localisation
     debug_camera: bool = False       # attach camera image to debug output (visualisation)
+    use_objects: bool = True         # lidar/radar object perception + ACC
+    use_radar: bool = True
+    time_gap: float = 1.6            # s, ACC following time gap
+    standstill_gap: float = 4.0      # m
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "StackConfig":
@@ -71,6 +77,8 @@ class AutonomyStack:
         self.lane_detector: LaneDetector | None = None
         self.lanes: LaneDetection | None = None
         self._cam_img = None
+        self.objects = ObjectPerception(hd_map, self.cfg.use_radar) if self.cfg.use_objects else None
+        self.obstacles = []
         self._dbg: dict = {}
         self.cmd = ControlCommand()
 
@@ -131,6 +139,8 @@ class AutonomyStack:
         if est is None:
             self.mode = "INIT"
             return self._hold()
+        if self.objects is not None:
+            self.objects.process(b, est)
         if self.rpath is None:
             if not self.localizer.ready:
                 return self._localizing(est, dt)
@@ -155,6 +165,7 @@ class AutonomyStack:
             self.mode = "GOAL_REACHED"
         delta = self.lat_ctrl.steer(path, est.x, est.y, est.yaw, est.v, est.yaw_rate, s_hint=s)
         acc = self.lon_ctrl.command(v_ref, a_ff, est.v, dt)
+        acc = self._follow(path, s, est, v_ref, acc)
         self.cmd = ControlCommand(delta, acc, self._turn_signal(s, est.v))
         self._debug(est, s, v_ref)
         return self.cmd
@@ -204,6 +215,27 @@ class AutonomyStack:
         self._dbg = {"mode": self.mode}
         return self.cmd
 
+    def _follow(self, path, s: float, est, v_ref: float, acc: float) -> float:
+        """ACC / yielding: limit the acceleration with IDM w.r.t. the closest
+        object on (or about to enter) the planned path."""
+        self.obstacles = []
+        if self.objects is None:
+            return acc
+        self.obstacles = path_obstacles(path, s, est.v, self.objects.predictions, self.p)
+        if not self.obstacles:
+            return acc
+        ob = self.obstacles[0]
+        a_idm = idm_accel(est.v, max(v_ref, 0.1), ob.gap, max(ob.v_along, 0.0),
+                          a_max=self.cfg.a_acc, b=2.0, T=self.cfg.time_gap,
+                          s0=self.cfg.standstill_gap)
+        a = min(acc, max(a_idm, -6.0))
+        if a < acc:
+            # bypass the comfort jerk limit when the situation demands braking
+            self.lon_ctrl.prev_a = a
+        if est.v < 0.3 and ob.gap < self.cfg.standstill_gap + 2.0:
+            a = min(a, -2.0)       # hold at standstill behind the obstacle
+        return a
+
     def _speed_target(self, s: float, v: float) -> tuple[float, float]:
         path = self.rpath.path
         prof = self.vmax_profile
@@ -240,6 +272,17 @@ class AutonomyStack:
                    f"v_ref={v_ref * 3.6:5.1f}km/h  lanes={self._lane_hud()}",
             "lanes_world": self._lanes_world(est),
         }
+        if self.objects is not None:
+            self._dbg["tracks"] = [(t.x, t.y, t.yaw, t.length, t.width, t.vx, t.vy, t.id, t.cls.name)
+                                   for t in self.objects.tracks]
+            self._dbg["tracks_t"] = self.objects.tracker.t if self.objects.tracker.t is not None else 0.0
+            self._dbg["predictions"] = [max(p.modes, key=lambda m: m[0])[1][:, :2]
+                                        for p in self.objects.predictions if p.track.speed > 0.5]
+            pts = self.objects.obstacle_points
+            self._dbg["lidar_xy"] = pts[::3] if len(pts) else pts
+            if self.obstacles:
+                ob = self.obstacles[0]
+                self._dbg["hud"] += f"  lead#{ob.track_id} {ob.kind} gap={ob.gap:5.1f}m"
         if self._cam_img is not None:
             self._dbg["camera_view"] = self._cam_img
 

@@ -54,7 +54,7 @@ python -m pytest -q -n 4
 | M0 – Simülatör çekirdeği | ✅ |
 | M1 – Lokalizasyon + GPS tabanlı sürüş | ✅ |
 | M2 – Kamera şerit algılama + şerit takibi | ✅ |
-| M3 – LiDAR/radar algılama + nesne takibi | ⏳ |
+| M3 – LiDAR/radar algılama + nesne takibi | ✅ |
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ⏳ |
 | M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ⏳ |
 | M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ⏳ |
@@ -68,6 +68,8 @@ python -m pytest -q -n 4
 | ![](docs/images/m1_urban_route.png) | ![](docs/images/m1_tunnel_localization.png) |
 | **M2 – kamera şerit algılama (çift sarı çizgi)** | **M2 – standart GPS: kamera füzyonu ile/olmadan** |
 | ![](docs/images/m2_camera_rural.png) | ![](docs/images/m2_fusion_comparison.png) |
+| **M3 – LiDAR/radar nesne takibi + tahmin** | **M3 – ACC dur‑kalk** |
+| ![](docs/images/m3_highway_tracking.png) | ![](docs/images/m3_acc_stop_and_go.png) |
 
 ## Araç varsayımları
 

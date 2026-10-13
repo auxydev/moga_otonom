@@ -10,7 +10,7 @@ yeşilken tamamlanmış sayılır (regresyon koruması).
 | M0 | Simülatör çekirdeği (MogaSim) | HD harita modeli, harita kütüphanesi, dinamik bisiklet araç modeli + EV güç aktarma/batarya, IDM trafik, yayalar, trafik ışıkları, metrikler, görselleştirme, senaryo koşucusu | Referans (oracle) sürücü otoyol / pist / şehir senaryolarını kazasız sürer | ✅ |
 | M1 | Lokalizasyon + GPS tabanlı otonom sürüş | GNSS/IMU/teker odometrisi sensör modelleri, WGS‑84↔ENU, EKF füzyonu, GPS görev (lat/lon) → şerit seviyesinde rota (A*), pure‑pursuit + PID | Araç yalnızca sensör verisiyle GPS hedeflerine gider | ✅ |
 | M2 | Kamera ile şerit algılama + şerit takibi | Kamera sensör modeli, IPM, sırt (ridge) filtresi, kayan pencere, polinom uydurma, zamansal filtre, Stanley kontrolcü, şerit‑göreli lokalizasyon düzeltmesi | Virajlı yolda kamera tabanlı şerit takibi, GNSS kesintisinde şeritle konum düzeltme | ✅ |
-| M3 | LiDAR/Radar algılama + çoklu nesne takibi | Işın izleme LiDAR, radar, zemin ayrıştırma (RANSAC), harita ROI, kümeleme, L‑shape kutu uydurma, sınıflandırma, KF + Macar algoritması ile takip, radar füzyonu, şerit tabanlı tahmin | Trafik içinde nesneler tespit/takip edilir, ACC ile takip | ⏳ |
+| M3 | LiDAR/Radar algılama + çoklu nesne takibi | Işın izleme LiDAR, radar, zemin ayrıştırma (RANSAC), harita ROI, kümeleme, L‑shape kutu uydurma, sınıflandırma, KF + Macar algoritması ile takip, radar füzyonu, şerit tabanlı tahmin | Trafik içinde nesneler tespit/takip edilir, ACC ile takip | ✅ |
 | M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ⏳ |
 | M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ⏳ |
 | M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ⏳ |
@@ -119,3 +119,50 @@ planlanmaz; araç `LOCALIZING` modunda kamerayla doğrudan şerit takibi yapar.
 
 ![](images/m2_camera_rural.png)
 ![](images/m2_fusion_comparison.png)
+
+## M3 – LiDAR/radar algılama, çoklu nesne takibi, tahmin, ACC (tamamlandı)
+
+**Sensör modelleri**
+* `sim/sensors/lidar.py` – 32 kanallı dönen LiDAR (‑25°…+10°, 0.4° azimut, 10 Hz, 100 m):
+  zemin düzlemi + araç/yaya/yapı kutularıyla ışın kesişimi (kutunun kapladığı azimut
+  sektörüyle sınırlı → ~4 ms/kare), menzil gürültüsü, ışın kaybı, şerit boyası
+  yansıtıcılığı, yağmurda menzil düşüşü ve yakın mesafe yağmur gürültüsü.
+* `sim/sensors/radar.py` – ön uzun menzilli radar (±45°, 160 m): kutunun en yakın
+  noktasından menzil/azimut/Doppler, RCS'ye bağlı tespit olasılığı (yaya zayıf), örtme,
+  statik parazit (clutter).
+
+**Algılama** (`autonomy/perception/lidar_detection.py`)
+1. RANSAC + en küçük kareler ile zemin düzlemi,
+2. HD harita ilgi bölgesi (yol + 5 m kaldırım payı) → yol dışı yapılar elenir,
+3. doluluk ızgarası + bağlı bileşen kümeleme,
+4. **eğik açıda parçalanan yüzeylerin birleştirilmesi** (kamyon yan yüzü ~1 m aralıklı ışınlar),
+5. arama tabanlı **L‑shape kutu uydurma**; tek yüz görülen nesnelerde **harita şerit
+   yönü önceli**,
+6. ayak izine dayalı sınıflandırma (yükseklik yalnızca yakında güvenilir),
+   kısmi görülen araçlar için **amodal tamamlama**, çakışan kutular için NMS.
+
+**Takip** (`autonomy/tracking/tracker.py`): sabit hız Kalman filtresi, Mahalanobis +
+Macar algoritması ile ilişkilendirme, sınıf uyumluluğu, M‑of‑N onay, radar Doppler EKF
+güncellemesi ve statik parazit reddi, yalnız‑radar aday izler, kopya iz birleştirme.
+
+**Tahmin** (`autonomy/prediction/predictor.py`): şerit üzerindeki araçlar için şerit
+grafında dallanan (kavşakta düz/sağ/sol olasılıklı) şerit takibi, şerit değiştirme
+algılama, diğerleri için sabit hız.
+
+**ACC / yol verme** (`autonomy/planning/object_reasoning.py`): yol koridorundaki öncü
+araç ve yola girecek (kesişen) nesneler; IDM ile takip, duran engel arkasında güvenli durma.
+
+**Algılama kalitesi** (yer gerçeğine göre, gecikme telafili; `m3_highway_perception`):
+geri çağırma **0.99**, kesinlik **1.00**, konum RMSE **0.27 m**, hız RMSE **0.48 m/s**,
+sınıf doğruluğu **%100**.
+
+| Senaryo | İçerik |
+|---|---|
+| `m3_highway_perception` | 3 şeritte yoğun trafik (otomobil + tır), algılama kalitesi + ACC |
+| `m3_acc_stop_and_go` | Öncü araç yavaşlar, durur, tekrar kalkar |
+| `m3_lead_hard_brake` | 90 km/h'te öncü araç 6 m/s² ile acil durur |
+| `m3_stopped_vehicle` | Viraj arkasında arızalı araç: güvenli durma |
+| `m3_pedestrian_jaywalk` | Yaya yola aniden girer: yol ver, sonra devam et |
+
+![](images/m3_highway_tracking.png)
+![](images/m3_acc_stop_and_go.png)

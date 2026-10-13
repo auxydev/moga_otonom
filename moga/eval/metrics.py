@@ -37,6 +37,8 @@ class MetricsTracker:
         self.mrm_events: list[tuple[float, str]] = []
         self.aeb_events: list[float] = []
         self.modes: list[tuple[float, str]] = []
+        self.perc = {"tp": 0, "fn": 0, "fp": 0, "pos_err": [], "vel_err": [], "cls_ok": 0}
+        self._last_debug: dict = {}
 
     # ------------------------------------------------------------------
     def update(self, debug: dict | None, pose_at_sense=None):
@@ -58,6 +60,7 @@ class MetricsTracker:
         L["cmd_steer"].append(w.last_cmd.steering_angle)
         L["soc"].append(st.soc)
         debug = debug or {}
+        self._last_debug = debug
         loc = debug.get("loc")
         if loc is not None:
             ref = pose_at_sense if pose_at_sense is not None else pose
@@ -105,6 +108,12 @@ class MetricsTracker:
             self.offroad_time += hdt
         # red light crossing by the front bumper
         self._check_red_light(t)
+        if "tracks" in self._last_debug:
+            # tracks refer to the last lidar frame: extrapolate to the current time
+            age = t - self._last_debug.get("tracks_t", t)
+            tracks = [(tr[0] + tr[5] * age, tr[1] + tr[6] * age, *tr[2:])
+                      for tr in self._last_debug["tracks"]]
+            self._perception(tracks)
         # clearance / TTC
         for a in w.active_actors():
             dx, dy = a.x - pose.x, a.y - pose.y
@@ -123,6 +132,40 @@ class MetricsTracker:
                 v_rel = ego.speed - a.v * math.cos(a.yaw - pose.yaw)
                 if v_rel > 0.1:
                     self.min_ttc = min(self.min_ttc, clear / v_rel)
+
+    KIND_TO_CLS = {"car": "CAR", "truck": "TRUCK", "pedestrian": "PEDESTRIAN",
+                   "cyclist": "CYCLIST", "static": "STATIC"}
+
+    def _perception(self, tracks: list):
+        """Object-level detection quality inside the region of interest
+        (-30..60 m longitudinal, +-15 m lateral)."""
+        w = self.world
+        pose = w.ego.pose
+        P = self.perc
+        used = set()
+        actors = [a for a in w.active_actors()]
+        for a in actors:
+            loc = pose.to_local(np.array([[a.x, a.y]]))[0]
+            if not (-30.0 < loc[0] < 60.0 and abs(loc[1]) < 15.0):
+                continue
+            best, bd = None, 2.5
+            for tr in tracks:
+                d = math.hypot(tr[0] - a.x, tr[1] - a.y)
+                if d < bd and tr[7] not in used:
+                    best, bd = tr, d
+            if best is None:
+                P["fn"] += 1
+                continue
+            used.add(best[7])
+            P["tp"] += 1
+            P["pos_err"].append(bd)
+            P["vel_err"].append(math.hypot(best[5] - a.v * math.cos(a.yaw),
+                                           best[6] - a.v * math.sin(a.yaw)))
+            P["cls_ok"] += int(self.KIND_TO_CLS.get(a.kind) == best[8])
+        for tr in tracks:
+            loc = pose.to_local(np.array([[tr[0], tr[1]]]))[0]
+            if tr[7] not in used and -30.0 < loc[0] < 60.0 and abs(loc[1]) < 15.0:
+                P["fp"] += 1
 
     def _check_red_light(self, t: float):
         w = self.world
@@ -192,6 +235,13 @@ class MetricsTracker:
             "aeb_events": self.aeb_events,
             "modes": self.modes,
         }
+        P = self.perc
+        if P["tp"] + P["fn"] > 0:
+            s["perception_recall"] = P["tp"] / (P["tp"] + P["fn"])
+            s["perception_precision"] = P["tp"] / max(P["tp"] + P["fp"], 1)
+            s["perception_pos_rmse"] = float(np.sqrt(np.mean(np.square(P["pos_err"])))) if P["pos_err"] else float("nan")
+            s["perception_vel_rmse"] = float(np.sqrt(np.mean(np.square(P["vel_err"])))) if P["vel_err"] else float("nan")
+            s["perception_cls_acc"] = P["cls_ok"] / max(P["tp"], 1)
         if self.loc_err:
             e = np.asarray(self.loc_err)
             s["loc_rmse"] = float(np.sqrt(np.mean(e ** 2)))
