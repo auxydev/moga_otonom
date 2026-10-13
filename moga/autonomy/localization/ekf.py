@@ -45,7 +45,9 @@ class PoseEKF:
         self.initialized = True
 
     # -------------------------------------------------------- prediction
-    def predict(self, dt: float, gyro_z: float, accel_x: float):
+    def predict(self, dt: float, gyro_z: float, accel_x: float, slip: float = 0.0):
+        """``slip``: rear-axle sideslip angle (velocity direction minus heading),
+        estimated from the measured lateral acceleration by the caller."""
         if dt <= 0:
             return
         x = self.x
@@ -53,7 +55,7 @@ class PoseEKF:
         w = gyro_z - x[IBG]
         a = accel_x - x[IBA]
         # midpoint integration
-        ym = yaw + 0.5 * w * dt
+        ym = yaw + 0.5 * w * dt + slip
         vm = max(0.0, v + 0.5 * a * dt)
         c, s = math.cos(ym), math.sin(ym)
         x[IX] += vm * c * dt
@@ -113,14 +115,15 @@ class PoseEKF:
         return self._update("gnss_pos", np.array([e, n]), h, H, R, gate)
 
     def update_gnss_velocity(self, ve: float, vn: float, std: float = 0.1,
-                             gate: float | None = 13.8) -> bool:
+                             gate: float | None = 13.8, v_lat: float = 0.0) -> bool:
+        """``v_lat``: body-frame lateral velocity of the antenna (sideslip + lever arm)."""
         yaw, v = self.x[IYAW], self.x[IV]
         c, s = math.cos(yaw), math.sin(yaw)
-        h = np.array([v * c, v * s])
+        h = np.array([v * c - v_lat * s, v * s + v_lat * c])
         H = np.zeros((2, N))
-        H[0, IYAW] = -v * s
+        H[0, IYAW] = -v * s - v_lat * c
         H[0, IV] = c
-        H[1, IYAW] = v * c
+        H[1, IYAW] = v * c - v_lat * s
         H[1, IV] = s
         return self._update("gnss_vel", np.array([ve, vn]), h, H, np.eye(2) * std ** 2, gate)
 

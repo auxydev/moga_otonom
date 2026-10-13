@@ -43,8 +43,8 @@ python scripts/run_scenario.py m1_urban_route --gif out/urban.gif --overview out
 # bir milestone'un tüm senaryoları + rapor
 python scripts/run_scenario.py --milestone M0 --driver oracle --report out/report.md
 
-# testler
-python -m pytest -q
+# testler (paralel)
+python -m pytest -q -n 4
 ```
 
 ## Durum
@@ -53,7 +53,7 @@ python -m pytest -q
 |-----------|-------|
 | M0 – Simülatör çekirdeği | ✅ |
 | M1 – Lokalizasyon + GPS tabanlı sürüş | ✅ |
-| M2 – Kamera şerit algılama + şerit takibi | ⏳ |
+| M2 – Kamera şerit algılama + şerit takibi | ✅ |
 | M3 – LiDAR/radar algılama + nesne takibi | ⏳ |
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ⏳ |
 | M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ⏳ |
@@ -66,6 +66,8 @@ python -m pytest -q
 | ![](docs/images/m0_highway.png) | ![](docs/images/m0_urban_overview.png) |
 | **M1 – GPS görevi, şerit seviyesinde rota** | **M1 – tünelde ölü hesap (GNSS yok)** |
 | ![](docs/images/m1_urban_route.png) | ![](docs/images/m1_tunnel_localization.png) |
+| **M2 – kamera şerit algılama (çift sarı çizgi)** | **M2 – standart GPS: kamera füzyonu ile/olmadan** |
+| ![](docs/images/m2_camera_rural.png) | ![](docs/images/m2_fusion_comparison.png) |
 
 ## Araç varsayımları
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from moga.sim.sensors.base import Sensor, SensorSuite, VehicleStatusSensor
+from moga.sim.sensors.camera import CameraConfig, CameraModel, CameraSensor
 from moga.sim.sensors.gnss import GnssConfig, GnssSensor, GnssZone
 from moga.sim.sensors.inertial import ImuConfig, ImuSensor, WheelConfig, WheelSensor
 
@@ -22,10 +23,11 @@ def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> Senso
         ImuSensor(config.get("imu", ImuConfig()), rngs[1]),
         WheelSensor(config.get("wheel", WheelConfig()), rngs[2]),
         GnssSensor(world, config.get("gnss", GnssConfig()), rngs[3]),
+        CameraSensor(world, config.get("camera", CameraConfig()), rngs[4]),
     ]
     disabled = set(config.get("disable", ()))
     return SensorSuite([s for s in sensors if s.name not in disabled])
 
 
 __all__ = ["Sensor", "SensorSuite", "VehicleStatusSensor", "make_sensor_suite", "GnssConfig",
-           "GnssZone", "ImuConfig", "WheelConfig"]
+           "GnssZone", "ImuConfig", "WheelConfig", "CameraConfig", "CameraModel"]

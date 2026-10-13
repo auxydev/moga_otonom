@@ -18,13 +18,17 @@ from moga.common.vehicle_params import VehicleParams
 
 class StanleyController:
     def __init__(self, params: VehicleParams, k: float = 1.0, k_soft: float = 2.0,
-                 k_yaw: float = 1.0, k_damp: float = 0.08, understeer: float = 0.0019):
+                 k_yaw: float = 1.0, k_damp: float = 0.08, k_i: float = 0.02):
         self.p = params
         self.k = k
         self.k_soft = k_soft
         self.k_yaw = k_yaw
         self.k_damp = k_damp
-        self.k_us = understeer
+        self.k_i = k_i
+        # The front-axle heading error already contains the rear slip angle, so the
+        # feed-forward only adds the front slip angle: alpha_f = m*lr/(L*Cf) * a_y.
+        self.k_ff = params.mass * params.lr / (params.wheelbase * params.cornering_stiffness_front)
+        self.integ = 0.0
         self.last = {}
 
     def steer(self, path: Polyline, x: float, y: float, yaw: float, v: float, yaw_rate: float,
@@ -37,8 +41,13 @@ class StanleyController:
             s_f, d_f = path.project(np.array([fx, fy]))
         _, _, yaw_p, kap = path.interpolate(s_f)
         psi_e = float(wrap_angle(yaw_p - yaw))
+        if v > 3.0:
+            self.integ = float(np.clip(self.integ + d_f * 0.02, -2.0, 2.0))
+        else:
+            self.integ *= 0.98
         delta = (self.k_yaw * psi_e - math.atan2(self.k * d_f, self.k_soft + v)
-                 + self.k_us * v * v * kap - self.k_damp * (yaw_rate - v * kap))
+                 + self.k_ff * v * v * kap - self.k_damp * (yaw_rate - v * kap)
+                 - self.k_i * self.integ)
         self.last = {"cte": d_f, "psi_e": psi_e, "kappa": kap, "s_front": s_f}
         return float(np.clip(delta, -self.p.max_steer, self.p.max_steer))
 
@@ -100,3 +109,19 @@ class LongitudinalController:
             a = float(np.clip(a, self.prev_a - jmax * dt, self.prev_a + jmax * dt))
         self.prev_a = a
         return a
+
+
+class CameraLaneKeeper:
+    """Degraded-mode lateral control directly on the detected lane centre
+    (pure pursuit on the camera polynomial), independent of localisation."""
+
+    def __init__(self, params: VehicleParams):
+        self.p = params
+
+    def steer(self, lanes, v: float) -> float | None:
+        if lanes is None or not lanes.valid or lanes.confidence < 0.4:
+            return None
+        Ld = float(np.clip(0.8 * v + 4.0, 6.0, 25.0))
+        y = float(lanes.center_y(Ld))
+        delta = math.atan2(2.0 * self.p.wheelbase * y, Ld * Ld + y * y)
+        return float(np.clip(delta, -self.p.max_steer, self.p.max_steer))

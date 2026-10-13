@@ -12,9 +12,10 @@ from dataclasses import dataclass, field, fields
 
 import numpy as np
 
-from moga.autonomy.control.controllers import (LongitudinalController, PurePursuitController,
-                                               StanleyController)
+from moga.autonomy.control.controllers import (CameraLaneKeeper, LongitudinalController,
+                                               PurePursuitController, StanleyController)
 from moga.autonomy.localization.localizer import Localizer
+from moga.autonomy.perception.lane_detection import LaneDetection, LaneDetector
 from moga.autonomy.planning.route_path import RoutePath, build_route_path, speed_profile
 from moga.autonomy.planning.route_planner import Route, RoutePlanner, RouteStep
 from moga.common.messages import ControlCommand, Mission, SensorBundle, TurnSignal
@@ -32,6 +33,8 @@ class StackConfig:
     goal_tolerance: float = 1.5
     replan_cte: float = 4.0          # m, re-route if this far from the path
     open_route_length: float = 2500.0
+    use_camera_lanes: bool = True    # camera lane detection + lane-relative localisation
+    debug_camera: bool = False       # attach camera image to debug output (visualisation)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "StackConfig":
@@ -57,6 +60,7 @@ class AutonomyStack:
         self.lat_ctrl = (PurePursuitController(params) if self.cfg.lateral == "pure_pursuit"
                          else StanleyController(params))
         self.lon_ctrl = LongitudinalController()
+        self.cam_keeper = CameraLaneKeeper(params)
         self.route: Route | None = None
         self.rpath: RoutePath | None = None
         self.vmax_profile: np.ndarray | None = None
@@ -64,6 +68,9 @@ class AutonomyStack:
         self.mode = "INIT"
         self.last_t = None
         self.est = None
+        self.lane_detector: LaneDetector | None = None
+        self.lanes: LaneDetection | None = None
+        self._cam_img = None
         self._dbg: dict = {}
         self.cmd = ControlCommand()
 
@@ -117,11 +124,16 @@ class AutonomyStack:
         dt = 0.02 if self.last_t is None else max(1e-3, b.t - self.last_t)
         self.last_t = b.t
         est = self.localizer.process(b)
+        if est is not None and b.camera is not None and self.cfg.use_camera_lanes:
+            self._perceive_lanes(b, est)
+            est = self.localizer.snapshot(b.t)
         self.est = est
         if est is None:
             self.mode = "INIT"
             return self._hold()
         if self.rpath is None:
+            if not self.localizer.ready:
+                return self._localizing(est, dt)
             if est.lane_id is None or not self._plan(est.lane_id, self.localizer.lane_s):
                 self.mode = "NO_ROUTE"
                 return self._hold()
@@ -145,6 +157,46 @@ class AutonomyStack:
         acc = self.lon_ctrl.command(v_ref, a_ff, est.v, dt)
         self.cmd = ControlCommand(delta, acc, self._turn_signal(s, est.v))
         self._debug(est, s, v_ref)
+        return self.cmd
+
+    def _perceive_lanes(self, b: SensorBundle, est):
+        if self.lane_detector is None:
+            self.lane_detector = LaneDetector(b.camera.camera)
+        self.lanes = self.lane_detector.detect(b.camera, est.v, est.yaw_rate)
+        self.localizer.update_lane_detection(self.lanes, b.t)
+        if self.cfg.debug_camera:
+            self._cam_img = b.camera.image[::2, ::2].copy()
+
+    def _lanes_world(self, est) -> list:
+        """Detected lane boundaries transformed into the map frame (visualisation)."""
+        out = []
+        if self.lanes is None:
+            return out
+        c, s = math.cos(est.yaw), math.sin(est.yaw)
+        for bd in (self.lanes.left, self.lanes.right):
+            if bd is None or bd.confidence < 0.3:
+                continue
+            xs = np.linspace(2.0, max(bd.x_max, 8.0), 20)
+            ys = bd.y(xs)
+            out.append(np.column_stack([est.x + c * xs - s * ys, est.y + s * xs + c * ys]))
+        return out
+
+    def _localizing(self, est, dt: float) -> ControlCommand:
+        """Lane-level localisation not yet available: keep the lane with the
+        camera at constant (or reducing) speed, otherwise brake gently."""
+        self.mode = "LOCALIZING"
+        delta = self.cam_keeper.steer(self.lanes, est.v)
+        if delta is None:
+            acc = self.lon_ctrl.command(0.0, -1.0, est.v, dt)
+            delta = 0.0
+        else:
+            acc = self.lon_ctrl.command(min(est.v, self.cfg.max_speed), 0.0, est.v, dt)
+            if est.v < 0.5:
+                acc = -2.0          # do not depart before localisation is ready
+        self.cmd = ControlCommand(delta, acc)
+        self._dbg = {"mode": self.mode, "loc": (est.x, est.y, est.yaw), "loc_std": est.std_xy,
+                     "lanes_world": self._lanes_world(est),
+                     "hud": f"lat σ={self.localizer.lateral_std():4.2f}m (waiting for lane-level fix)"}
         return self.cmd
 
     def _hold(self) -> ControlCommand:
@@ -185,8 +237,18 @@ class AutonomyStack:
             "path": path.points[i0:i1:2].copy(),
             "v_ref": v_ref,
             "hud": f"loc σ={est.std_xy:4.2f}m  gnss={self.localizer.gnss_fix.name}  "
-                   f"v_ref={v_ref * 3.6:5.1f}km/h",
+                   f"v_ref={v_ref * 3.6:5.1f}km/h  lanes={self._lane_hud()}",
+            "lanes_world": self._lanes_world(est),
         }
+        if self._cam_img is not None:
+            self._dbg["camera_view"] = self._cam_img
+
+    def _lane_hud(self) -> str:
+        d = self.lanes
+        if d is None or not d.valid:
+            return "-"
+        lt = (d.left.line_type[0] if d.left else "x") + (d.right.line_type[0] if d.right else "x")
+        return f"{lt} c={d.confidence:.1f}"
 
     def debug(self) -> dict:
         return self._dbg
