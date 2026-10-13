@@ -12,7 +12,7 @@ yeşilken tamamlanmış sayılır (regresyon koruması).
 | M2 | Kamera ile şerit algılama + şerit takibi | Kamera sensör modeli, IPM, sırt (ridge) filtresi, kayan pencere, polinom uydurma, zamansal filtre, Stanley kontrolcü, şerit‑göreli lokalizasyon düzeltmesi | Virajlı yolda kamera tabanlı şerit takibi, GNSS kesintisinde şeritle konum düzeltme | ✅ |
 | M3 | LiDAR/Radar algılama + çoklu nesne takibi | Işın izleme LiDAR, radar, zemin ayrıştırma (RANSAC), harita ROI, kümeleme, L‑shape kutu uydurma, sınıflandırma, KF + Macar algoritması ile takip, radar füzyonu, şerit tabanlı tahmin | Trafik içinde nesneler tespit/takip edilir, ACC ile takip | ✅ |
 | M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ✅ |
-| M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ⏳ |
+| M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ✅ |
 | M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ⏳ |
 
 ## Seviye 4 (SAE J3016) gereksinimlerinin karşılanması
@@ -248,3 +248,63 @@ mesafe > 0.3 m. Regresyon: M0–M4'ün 24 senaryosu + birim testleri yeşil.
 ![](images/m4_overtake.png)
 ![](images/m4_rural_bypass.png)
 ![](images/m4_aeb_pedestrian.png)
+
+## M5 – Şehir içi sürüş (tamamlandı)
+
+**Trafik ışığı algılama**
+* Simülatör (`sim/sensors/traffic_light.py`): kamera + sınıflandırıcının nesne seviyesinde
+  modeli – 70° yatay / ‑5°…+25° dikey görüş, 110 m menzil, yalnızca araca bakan ışık başları,
+  mesafe ve hava ile düşen tespit olasılığı, diğer araçların görüş hattını kapatması
+  (ör. kamyon), %1 "bilinmiyor", %0.2 yanlış renk, mesafeyle büyüyen konum gürültüsü.
+  Işık başları kavşağın karşı köşesinde (dur çizgisinde beklerken de görüş alanında).
+* Otonomi (`autonomy/perception/traffic_lights.py`): tespitlerin HD harita ışık başlarıyla
+  ilişkilendirilmesi (konum kapısı + yön), 0.35 s güven ağırlıklı oylama, tutucu eşitlik
+  bozma (kırmızı > sarı > yeşil), 1 s gözlem yoksa `unknown`, durum değişim zamanı.
+
+**Trafik kuralları** (`autonomy/planning/rules.py`) – algılanan sahneyi referans çizgisi
+üzerinde durma kısıtlarına ve hız sınırlarına çevirir:
+* **Işık**: kırmızıda dur çizgisinde dur; `unknown` ve çizgiye < 60 m ise dur; sarıda
+  **ikilem bölgesi** kararı (3 m/s² ile durulabiliyorsa dur; durulamıyor ve çizgi sarı
+  süresinde geçilebiliyorsa devam – karar korunur).
+* **Yaya geçidi**: geçitte olan / geçide yürüyen yayalara yol ver; kavşak çıkışındaki geçit
+  için kavşağa girmeden bekle (kavşağı kilitleme); geçit yakınında yaya ya da sınıflandırılmamış
+  küçük nesne varsa geçide 15 km/h ile yaklaş (proaktif yavaşlama).
+* **Kavşak yol hakkı**: kavşağı boşaltan çatışan araçlara ve sinyalsiz kavşakta çatışan
+  yönden yaklaşan araçlara yol ver (savunmacı: diğerleri önceliklidir), zaman boşluğu kontrolü.
+* **Kavşak geçiş hızı**: sinyalize 40 km/h, sinyalsiz 30 km/h.
+
+**Planlayıcı entegrasyonu** (`planning/planner.py`, `frenet.py`)
+* Kural duruşları sert kısıttır; hız sınırları mevcut durumdan uygulanabilir yavaşlamayla
+  devreye girer. İlerleme referansı (ideal hız profili) duruşlar için 1.8 m/s² ile daha erken
+  ve yumuşak frenler (tipik duruşlarda maks. yavaşlama < 2 m/s²).
+* **Kuyruk ≠ engel**: dur çizgisine 10 m yakın duran araç ve arkasındaki kuyruk trafiktir
+  (sollanmaz, bypass edilmez); kavşaktan uzakta park etmiş araç ise engeldir.
+* Kavşak yakınında keyfi şerit değiştirme / bypass yok; bypass manevrası kavşağa uzanamaz.
+* **Geçiş önceliği**: araç kavşağın içindeyken (ya da yeşilde girerken) çatışan yaklaşım
+  şeritlerindeki araçların – durabilecek durumdaysalar – giriş çizgisinde duracağı varsayılır;
+  kavşak ortasında gereksiz acil fren yapılmaz.
+* Geçilen (durağan doğrulanmış) engelin izi, görüş açısı değişiminden kaynaklanan sahte hızla
+  ileri taşınmaz. Başlangıçtaki hız fazlası (ör. viraj/kavşak sınırına girerken) jerk sınırlı
+  rampayla azaltılabilir; fizibilite bu yüzden çökmez.
+
+**Simülatör iyileştirmeleri**: NPC araçlar çapraz / dönen trafiğin işgal ettiği kavşağa girmez;
+**yaya geçidi ihlali** metriği (geçitte yaya varken aracın geçitte hareket etmesi) ve kabul
+kriteri; konfor metrikleri 0.2 s ortalamalı.
+
+| Senaryo | İçerik | Sonuç |
+|---|---|---|
+| `m5_red_light_stop_go` | Varışta kırmızı: ışığı algıla, dur çizgisinde dur, yeşilde kalk | maks. yavaşlama 1.8 m/s² |
+| `m5_yellow_dilemma` | Çizgiye ~12 m kala sarı → devam; ~46 m kala sarı → dur | ihlal yok, 3.3 m/s² |
+| `m5_crosswalk_pedestrians` | Yeşil ışıkta kavşak öncesi ve sonrası geçitlerde yayalar | yayaya ≥ 2.6 m, kavşak kilitlenmez |
+| `m5_unsignalized_junction` | Sinyalsiz 4 kollu kavşakta çapraz yoldan iki araç | yol ver, boşlukta geç, TTC ≥ 4.8 s |
+| `m5_queue_at_red` | Kırmızıda bekleyen iki aracın arkasında kuyruk, yeşilde takip | bypass / şerit değiştirme yok |
+| `m5_urban_mission` | 3×3 sinyalize ızgarada GPS görevi: araç arkasında sola dönüş, çapraz trafikli 4 kollu kavşak, karşı trafikli çift park etmiş minibüs, geçitlerde yayalar, sağa dönüşler, sinyalsiz köşe | 627 m, 178 s, acil durma yok |
+
+Kabul kriterleri: çarpışma yok, kırmızı ışık ihlali yok, yaya geçidi ihlali yok, normal
+sürüşte acil durma / AEB yok, konfor yavaşlaması ≤ 3.5–4.5 m/s², senaryoya özgü davranışın
+gözlenmesi (`WAIT_LIGHT`, `YIELD_PED`, `YIELD_JUNCTION`, `BYPASS`).
+Regresyon: M0–M5'in 30 senaryosu + birim testleri yeşil.
+
+![](images/m5_urban_overview.png)
+![](images/m5_urban_mission.png)
+![](images/m5_crosswalk.png)

@@ -11,12 +11,18 @@ from moga.autonomy.planning.behavior import (BehaviorContext, BehaviorDecision, 
                                              LaneObjects)
 from moga.autonomy.planning.frenet import FrenetPlanner, LongTarget, PlannerConfig, PlanResult
 from moga.autonomy.planning.reference import ReferenceLine, ReferenceManager
+from moga.autonomy.planning.rules import TrafficRules
 from moga.autonomy.planning.route_planner import Route
 from moga.common.geometry import wrap_angle
 from moga.common.messages import (LocalizationEstimate, ObjectClass, PredictedObject,
                                   Trajectory)
 from moga.common.vehicle_params import VehicleParams
 from moga.map.hd_map import BoundaryType, HDMap, LaneType
+
+
+RULE_MODES = {"red_light": "WAIT_LIGHT", "yellow_light": "WAIT_LIGHT",
+              "unknown_light": "WAIT_LIGHT", "yield_ped": "YIELD_PED",
+              "yield_junction": "YIELD_JUNCTION"}
 
 
 class RouteTracker:
@@ -124,6 +130,7 @@ class TacticalPlanner:
         self.bypass_go_prev = False
         self.bypass_v = 9.0          # passing speed in the adjacent / opposite lane
         self.last: PlanResult | None = None
+        self.rules = TrafficRules(hd_map, params)
 
     # ------------------------------------------------------------ helpers
     def _lane_s(self, lane_id: str, x: float, y: float, hint: float | None = None):
@@ -203,8 +210,22 @@ class TacticalPlanner:
                 "s_dd": a * math.cos(dth), "d": d, "d_d": v * math.sin(dth),
                 "d_dd": a * math.sin(dth), "v": v}
 
+    def _junction_entry(self, ref: ReferenceLine, s_ego: float) -> float:
+        """Arc length of the next junction entry (stop line if there is one)
+        ahead of the vehicle on the reference line (inf if none)."""
+        for k, lid in enumerate(ref.lanes):
+            lane = self.map.lanes[lid]
+            if not lane.in_junction or ref.offsets[k] < s_ego - 0.5:
+                continue        # (a junction we are already in is not ahead)
+            if k >= 1:
+                prev = self.map.lanes[ref.lanes[k - 1]]
+                if prev.stop_line_s is not None:
+                    return float(ref.offsets[k - 1] + prev.stop_line_s)
+            return float(ref.offsets[k])
+        return math.inf
+
     def _lane_objects(self, ref: ReferenceLine, s_ego: float, preds: list[PredictedObject],
-                      w: float, t: float):
+                      w: float, t: float, s_junc: float = math.inf):
         objs = {k: LaneObjects() for k in ("cur", "left", "right")}
         info = []
         front = self.p.front_bumper
@@ -232,19 +253,96 @@ class TacticalPlanner:
                 side = "right"
             else:
                 continue
-            o = objs[side]
-            if so >= s_ego:
-                gap = so - half - (s_ego + front)
-                if gap < o.lead_gap:
-                    o.lead_gap, o.lead_v, o.lead_static = gap, max(v_along, 0.0), static
-            else:
-                gap = (s_ego - rear) - (so + half)
-                if gap < o.rear_gap:
-                    o.rear_gap, o.rear_v = gap, max(v_along, 0.0)
             info.append({"id": tr.id, "side": side, "s": so, "d": do, "v": v_along,
                          "static": static, "cls": tr.cls, "half_l": half,
                          "half_w": 0.5 * tr.width})
+        # stopped vehicles waiting at a junction (first within 10 m of the stop
+        # line / junction entry, the others queued behind them) are traffic,
+        # not broken-down vehicles to be passed
+        for side in ("cur", "left", "right"):
+            queue_rear = s_junc
+            for o in sorted((o for o in info if o["side"] == side and o["s"] < s_junc + 30.0),
+                            key=lambda o: -o["s"]):
+                in_junction = self.map.lanes[ref.lane_at(o["s"])].in_junction
+                stopped = o["static"] or abs(o["v"]) < 0.5
+                if in_junction or (stopped and queue_rear - (o["s"] + o["half_l"]) < 10.0):
+                    o["static"] = False
+                    if stopped:
+                        queue_rear = min(queue_rear, o["s"] - o["half_l"])
+        for o in info:
+            lo = objs[o["side"]]
+            if o["s"] >= s_ego:
+                gap = o["s"] - o["half_l"] - (s_ego + front)
+                if gap < lo.lead_gap:
+                    lo.lead_gap, lo.lead_v, lo.lead_static = gap, max(o["v"], 0.0), o["static"]
+            else:
+                gap = (s_ego - rear) - (o["s"] + o["half_l"])
+                if gap < lo.rear_gap:
+                    lo.rear_gap, lo.rear_v = gap, max(o["v"], 0.0)
         return objs, info
+
+    def _right_of_way(self, preds: list[PredictedObject], ref: ReferenceLine, s_ego: float,
+                      lights) -> list[PredictedObject]:
+        """Vehicles approaching a junction the ego vehicle is inside of (or
+        entering on green) have to give way: they are predicted to stop at
+        their junction entry instead of crossing our path.  Vehicles that could
+        not stop any more (< 4.5 m/s^2) keep their full prediction."""
+        k_j = None
+        for k, lid in enumerate(ref.lanes):
+            lane = self.map.lanes[lid]
+            if lane.in_junction and ref.offsets[k] + lane.length > s_ego:
+                k_j = k
+                break
+        if k_j is None:
+            return preds
+        jid = self.map.lanes[ref.lanes[k_j]].junction_id
+        front = s_ego + self.p.front_bumper
+        s_entry = ref.offsets[k_j]
+        inside = front > s_entry - 0.5
+        prev = self.rules._approach(ref, k_j)
+        go = False
+        if prev is not None and prev.traffic_light_id is not None and lights is not None:
+            st, _ = lights.state(prev.traffic_light_id)
+            go = st == "green" or (st == "yellow" and prev.traffic_light_id in self.rules.go_on_yellow)
+        if not inside and not (go and s_entry - front < 40.0):
+            return preds
+        out = []
+        for pr in preds:
+            tr = pr.track
+            if tr.cls == ObjectClass.PEDESTRIAN or tr.speed < 0.5:
+                out.append(pr)
+                continue
+            m = self.map.best_match(tr.x, tr.y, math.atan2(tr.vy, tr.vx), max_dist=2.5,
+                                    heading_tol=math.radians(50))
+            if m is None or m.lane_id in ref.lanes:
+                out.append(pr)
+                continue
+            lane_o = self.map.lanes[m.lane_id]
+            if lane_o.in_junction or not any(self.map.lanes[x].junction_id == jid
+                                             for x in lane_o.successors):
+                out.append(pr)
+                continue
+            end = lane_o.stop_line_s if lane_o.stop_line_s is not None else lane_o.length - 1.0
+            d_o = end - m.s - 0.5 * tr.length
+            v = tr.speed
+            if d_o < 1.0 or v * v / (2.0 * max(d_o - 0.5, 0.1)) > 4.5:
+                out.append(pr)
+                continue
+            a = v * v / (2.0 * max(d_o - 0.5, 0.1))
+            ts = np.arange(len(pr.modes[0][1])) * pr.dt
+            tt = np.minimum(ts, v / a)
+            s = m.s + v * tt - 0.5 * a * tt * tt
+            x, y, yaw = lane_o.centerline.to_cartesian(s, np.full_like(s, m.d))
+            traj = np.column_stack([x, y, yaw, np.maximum(v - a * ts, 0.0)])
+            out.append(PredictedObject(tr, [(1.0, traj)], pr.dt))
+        return out
+
+    @staticmethod
+    def _frozen(pr: PredictedObject) -> PredictedObject:
+        tr = pr.track
+        n = len(pr.modes[0][1])
+        traj = np.column_stack([np.full(n, tr.x), np.full(n, tr.y), np.full(n, tr.yaw), np.zeros(n)])
+        return PredictedObject(tr, [(1.0, traj)], pr.dt)
 
     def _lc_allowed(self, lane_id: str, side: str) -> bool:
         lane = self.map.lanes[lane_id]
@@ -255,7 +353,7 @@ class TacticalPlanner:
         return btype == BoundaryType.DASHED
 
     def _bypass_gap_ok(self, obj_info: list[dict], ob: dict, s_ego: float, v0: float,
-                       w: float, buffer: float = 3.0) -> bool:
+                       w: float, buffer: float = 3.0, s_limit: float = math.inf) -> bool:
         """Gap acceptance for passing ``ob`` through the adjacent (possibly
         opposite-direction) lane: every vehicle approaching in that lane must
         need more time to reach the end of the manoeuvre zone than we need to
@@ -271,6 +369,8 @@ class TacticalPlanner:
         else:
             t_need = (vb - v0) / a + (dist - d_acc) / vb
         s_zone_end = s_end + p.front_bumper
+        if s_zone_end > s_limit - 5.0:
+            return False        # the manoeuvre would reach into a junction
         for o in obj_info:
             if o["id"] == ob["id"] or o["d"] < 0.3 * w or o["d"] > 2.0 * w:
                 continue
@@ -294,7 +394,7 @@ class TacticalPlanner:
     # --------------------------------------------------------------- main
     def plan(self, t: float, est: LocalizationEstimate, preds: list[PredictedObject],
              route: RouteTracker | None, accel: float, pred_age: float = 0.0,
-             v_cap: float | None = None) -> PlanOutput:
+             v_cap: float | None = None, lights=None) -> PlanOutput:
         p = self.p
         bypassing = self.behavior.state == "BYPASS"
         s_lane, d_lane = self._update_current_lane(est, route, allow_switch=not bypassing)
@@ -312,7 +412,9 @@ class TacticalPlanner:
         self.s_ref = s_ego
         lane = self.map.lanes[self.cur_lane]
         w = lane.width
-        objs, obj_info = self._lane_objects(ref, s_ego, preds, w, t)
+        s_junc = self._junction_entry(ref, s_ego)
+        objs, obj_info = self._lane_objects(ref, s_ego, preds, w, t, s_junc)
+        rule_stops = self.rules.evaluate(t, ref, s_ego, est.v, est, preds, lights)
 
         # ---------------- behaviour
         v_des = float(min(ref.vlim(s_ego + max(10.0, est.v)), self.max_speed))
@@ -340,12 +442,14 @@ class TacticalPlanner:
             else:
                 self.bypass_missing = 0
                 bypass_done = ob["s"] + ob["half_l"] < s_ego + p.rear_bumper - 2.0
+        # no discretionary lane changes / bypassing close to a junction
+        near_junction = s_junc - s_ego < max(30.0, 2.5 * est.v) or lane.in_junction
+        lc_ok = {side: self._lc_allowed(self.cur_lane, side) and (need is not None or not near_junction)
+                 for side in ("left", "right")}
         ctx = BehaviorContext(
             t, est.v, v_des, {"cur": self.cur_lane, "left": left_nb, "right": right_nb}, objs,
-            need, need_dist, remaining,
-            {"left": self._lc_allowed(self.cur_lane, "left"),
-             "right": self._lc_allowed(self.cur_lane, "right")},
-            can_bypass=True,
+            need, need_dist, remaining, lc_ok,
+            can_bypass=not near_junction,
             keep_right_ok=bool(route is not None and right_nb is not None and right_nb in route.lane_set),
             bypass_done=bypass_done)
         was_bypass = self.behavior.state == "BYPASS"
@@ -370,7 +474,8 @@ class TacticalPlanner:
                 # gap acceptance (with hysteresis); re-evaluated until alongside,
                 # so that the manoeuvre is aborted when new traffic appears
                 bypass_go = self._bypass_gap_ok(obj_info, bypass_ob, s_ego, max(st["s_d"], 0.0), w,
-                                                buffer=1.0 if self.bypass_go_prev else 3.0)
+                                                buffer=1.0 if self.bypass_go_prev else 3.0,
+                                                s_limit=s_junc)
             self.bypass_go_prev = bypass_go
         else:
             self.bypass_committed = False
@@ -442,6 +547,8 @@ class TacticalPlanner:
             # stay in the lane (ST constraint), stopping remains an option
             (opt_stops if dec.state == "LANE_CHANGE" else stops).append(
                 (s_ego + cur.lead_gap - s0_static, "obstacle"))
+        for rs in rule_stops:
+            stops.append((rs.s, rs.reason))
         for s_stop, why in stops + opt_stops:
             lts.append(LongTarget("stop", v=0.0, s=s_stop))
         # comfortable stop as an always-available fallback
@@ -449,17 +556,30 @@ class TacticalPlanner:
 
         # deceleration profile towards each stop: comfortable, or the one needed
         # from the current state when the stop was recognised late
-        stop_dec = [float(np.clip(1.1 * v0 * v0 / (2.0 * max(s_stop - s_ego, 0.5)), 3.0, 8.0))
-                    for s_stop, _ in stops]
+        a_need = [1.1 * v0 * v0 / (2.0 * max(s_stop - s_ego, 0.5)) for s_stop, _ in stops]
+        stop_dec = [float(np.clip(a, 3.0, 8.0)) for a in a_need]
+        # (the progress reference brakes earlier and more gently)
+        ref_dec = [float(np.clip(a, 1.8, 8.0)) for a in a_need]
+        caps = [(c.s0, c.s1, c.v, float(np.clip(1.1 * (v0 * v0 - c.v * c.v) / (2.0 * max(c.s0 - s_ego, 0.5)),
+                                                1.5, 8.0)))
+                for c in self.rules.caps]
 
-        def vlim_fn(S):
-            v = ref.vlim(S)
-            for (s_stop, _), a_dec in zip(stops, stop_dec):
-                v = np.where(S > s_stop + 0.5, 0.0,
-                             np.minimum(v, np.sqrt(2 * a_dec * np.maximum(s_stop - S, 0.0)) + 0.3))
-            if v_cap is not None:
-                v = np.minimum(v, v_cap)
-            return v
+        def limit_fn(decs, margin):
+            def fn(S):
+                v = ref.vlim(S)
+                for (s_stop, _), a_dec in zip(stops, decs):
+                    v = np.where(S > s_stop + 0.5, 0.0,
+                                 np.minimum(v, np.sqrt(2 * a_dec * np.maximum(s_stop - S, 0.0)) + margin))
+                for s0, s1, vc, a_c in caps:
+                    vcap = np.sqrt(vc * vc + 2 * a_c * np.maximum(s0 - S, 0.0)) + margin
+                    v = np.where(S <= s1, np.minimum(v, vcap), v)
+                if v_cap is not None:
+                    v = np.minimum(v, v_cap)
+                return v
+            return fn
+
+        vlim_fn = limit_fn(stop_dec, 0.3)
+        vref_fn = limit_fn(ref_dec, 0.0)
 
         margins = {ObjectClass.PEDESTRIAN: 0.5, ObjectClass.CYCLIST: 0.3}
         # objects moving along the reference (or standing on it) ahead of us
@@ -487,11 +607,18 @@ class TacticalPlanner:
             so, do = ref.line.project(np.array([tr.x, tr.y]), s_hint=s_ego - 100.0, window=160.0)
             if abs(do) < 0.5 * w and so + 0.5 * tr.length < s_ego and so > s_ego - 250.0:
                 rear_same.add(tr.id)
-        res = self.frenet.plan(ref.line, st, d_targets, d_pref, lts, preds, (lo, hi), vlim_fn, t,
+        preds_plan = self._right_of_way(preds, ref, s_ego, lights)
+        if dec.bypass and self.bypass_id is not None:
+            # the obstacle being passed was confirmed stationary: apparent motion
+            # of its track (changing aspect while passing) is not extrapolated
+            preds_plan = [self._frozen(pr) if pr.track.id == self.bypass_id and pr.track.speed < 1.5
+                          else pr for pr in preds_plan]
+        res = self.frenet.plan(ref.line, st, d_targets, d_pref, lts, preds_plan, (lo, hi), vlim_fn, t,
                                s_based=True if dec.bypass else None,
                                lat_dists=(10.0, 14.0, 20.0) if dec.bypass else None,
                                lat_anchor=(self.prev.lat_end if self.stitched and self.prev is not None
                                            and self.prev.ref_key == ref.lanes else None),
+                               v_ref_fn=vref_fn,
                                obstacle_cls_margin=margins, pred_age=pred_age, lon_obstacles=lon_obs,
                                time_gap=self.time_gap, standstill_gap=self.s0,
                                ignore_ids=rear_same if dec.state != "LANE_CHANGE" else None,
@@ -505,7 +632,14 @@ class TacticalPlanner:
             traj.ref_key = ref.lanes
         self.prev = traj
         self.last = res
-        dbg = {"behavior": dec.state, "reason": dec.reason, "target": dec.target,
+        # traffic rule currently constraining the vehicle (for the HUD / mode)
+        wait = None
+        if stops:
+            s_b, why_b = min(stops, key=lambda z: z[0])
+            if why_b in RULE_MODES and s_b - s_ego < max(25.0, est.v ** 2 / 4.0 + 10.0):
+                wait = RULE_MODES[why_b]
+        dbg = {"behavior": dec.state, "reason": dec.reason, "target": dec.target, "wait": wait,
+               "rules": [(r.reason, r.info) for r in rule_stops],
                "lane": self.cur_lane, "n_cand": res.n_candidates, "n_feas": res.n_feasible,
                "candidates": res.candidates, "v_des": v_des, "stops": stops + opt_stops,
                "gaps": gap_info,

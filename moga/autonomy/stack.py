@@ -24,6 +24,7 @@ from moga.autonomy.control.trajectory_controller import TrajectoryController
 from moga.autonomy.localization.localizer import Localizer
 from moga.autonomy.perception.lane_detection import LaneDetection, LaneDetector
 from moga.autonomy.perception.object_pipeline import ObjectPerception
+from moga.autonomy.perception.traffic_lights import TrafficLightPerception
 from moga.autonomy.planning.object_reasoning import idm_accel, path_obstacles
 from moga.autonomy.planning.planner import PlanOutput, RouteTracker, TacticalPlanner
 from moga.autonomy.planning.route_path import RoutePath, build_route_path, speed_profile
@@ -50,6 +51,7 @@ class StackConfig:
     use_objects: bool = True         # lidar/radar object perception
     use_radar: bool = True
     use_aeb: bool = True
+    use_traffic_lights: bool = True  # traffic light perception + traffic rules
     time_gap: float = 1.6            # s, ACC following time gap
     standstill_gap: float = 4.0      # m
     plan_period: float = 0.1         # s
@@ -96,6 +98,7 @@ class AutonomyStack:
         self.lane_detector: LaneDetector | None = None
         self.lanes: LaneDetection | None = None
         self.objects = ObjectPerception(hd_map, self.cfg.use_radar) if self.cfg.use_objects else None
+        self.lights = TrafficLightPerception(hd_map) if self.cfg.use_traffic_lights else None
         self.obstacles = []
         # safety
         self.aeb = AEB(params)
@@ -182,6 +185,8 @@ class AutonomyStack:
             self.objects.process(b, est)
         if b.radar is not None:
             self._last_radar = b.radar
+        if self.lights is not None and (b.traffic_lights is not None or self.lights.lights):
+            self.lights.update(b.t, b.traffic_lights, est)
         if self.route is None:
             if not self.localizer.ready:
                 return self._localizing(est, dt)
@@ -205,7 +210,7 @@ class AutonomyStack:
             age = (t - self.objects.tracker.t) if (self.objects is not None and
                                                   self.objects.tracker.t is not None) else 0.0
             out = self.tactical.plan(t, est, preds, self.route_tracker, self.cmd.acceleration,
-                                     pred_age=max(age, 0.0))
+                                     pred_age=max(age, 0.0), lights=self.lights)
             if out.replan_route:
                 lane = self.tactical.cur_lane
                 s_lane, _ = self.map.lanes[lane].centerline.project(np.array([est.x, est.y]))
@@ -221,8 +226,11 @@ class AutonomyStack:
             rem = self.route_tracker.remaining(self.map, s_lane) - 0.5 * self.p.wheelbase
             if self.goal_idx == len(self.goals) - 1 and rem < self.cfg.goal_tolerance and est.v < 0.3:
                 self.mode = "GOAL_REACHED"
+        state = out.decision.state
+        if state in ("LANE_KEEP", "BLOCKED") and out.debug.get("wait"):
+            state = out.debug["wait"]          # waiting for a light / yielding
         self.mode = self.mode if self.mode == "GOAL_REACHED" else (
-            "EMERGENCY_STOP" if out.emergency else out.decision.state)
+            "EMERGENCY_STOP" if out.emergency else state)
         self.cmd = ControlCommand(delta, acc, sig, emergency=out.emergency)
         self._debug_frenet(est, out)
         return self.cmd
@@ -381,6 +389,11 @@ class AutonomyStack:
         dbg["candidates"] = out.debug.get("candidates", [])
         dbg["behavior"] = out.decision.state
         stops = ",".join(w for _, w in out.debug.get("stops", []))
+        if self.lights is not None:
+            near = [f"{k[3:]}:{v[0][0].upper()}" for k, v in self.lights.states().items()
+                    if v[0] != "unknown"]
+            if near:
+                stops += ("  " if stops else "") + "TL " + " ".join(near[:3])
         gaps = " ".join(f"{s}:{g:.0f}m@{v:.0f}" for s, g, v in out.debug.get("gaps", []))
         dbg["hud"] = (f"{out.decision.state}{'/' + out.decision.reason if out.decision.reason else ''}"
                       f"  lane={out.debug.get('lane')}  v_des={out.debug.get('v_des', 0) * 3.6:4.0f}km/h"

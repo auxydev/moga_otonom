@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
-from moga.common.geometry import box_corners, wrap_angle
+from moga.common.geometry import box_corners, point_in_polygon, wrap_angle
 
 if TYPE_CHECKING:  # pragma: no cover
     from moga.sim.world import World
@@ -205,6 +205,25 @@ class LaneVehicle(Actor):
             return math.inf
         return math.inf
 
+    def _junction_block(self, world: "World", path) -> float:
+        """Distance to the junction entry if the junction is occupied by
+        crossing / turning traffic (do not enter a blocked junction)."""
+        for lid, off in path[:4]:
+            lane = world.map.lanes[lid]
+            if not lane.in_junction:
+                continue
+            dist = off - 0.5 * self.length
+            if dist < 0.5 or dist > 25.0 or lane.junction_id not in world.map.junctions:
+                return math.inf
+            poly = world.map.junctions[lane.junction_id].polygon
+            for e in world.entity_views(exclude=self.id):
+                if e.kind == "pedestrian" or abs(wrap_angle(e.yaw - self.yaw)) < 0.5:
+                    continue
+                if point_in_polygon(np.array([[e.x, e.y]]), poly)[0]:
+                    return max(dist - 1.0, 0.0)
+            return math.inf
+        return math.inf
+
     def idm(self, gap: float, v_lead: float) -> float:
         v0 = max(self.desired_speed, 0.1)
         a_free = self.a_max * (1.0 - (self.v / v0) ** 4)
@@ -254,7 +273,7 @@ class LaneVehicle(Actor):
         path = self.path(world)
         if t - self._leader_t >= 0.1 - 1e-9 or self._leader_cache is None:
             gap, v_lead = self._leader(world, path)
-            stop = self._light_stop(world, path)
+            stop = min(self._light_stop(world, path), self._junction_block(world, path))
             if stop < gap:
                 gap, v_lead = stop, 0.0
             self._leader_cache = (gap, v_lead)

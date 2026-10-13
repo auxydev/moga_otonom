@@ -26,6 +26,7 @@ class Criteria:
     reach_goal: bool = True
     goal_tolerance: float = 4.0
     no_red_light_violation: bool = True
+    yield_to_pedestrians: bool = True     # no driving on a crosswalk with a pedestrian on it
     no_offroad: bool = True
     max_speeding_s: float = 1.0           # seconds above limit (+5%) tolerated
     max_lane_rms: float | None = None     # m, ground-truth lateral offset in lane

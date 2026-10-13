@@ -38,8 +38,9 @@ Proje iki ana parçadan oluşur:
 ```
 GPS görevi ─► Rota planlama (A*, şerit grafı) ─► Rota takibi (zorunlu şerit değişimi, kalan yol)
                                                         │
-Tahminler ─► Nesne akıl yürütme (Frenet: şerit başına boşluk/hız, durağan engel)
-                                                        │
+Tahminler ─► Nesne akıl yürütme (Frenet: şerit başına boşluk/hız, durağan engel / kuyruk)
+Işık algısı + tahminler ─► Trafik kuralları (ışık, sarı ikilemi, yaya geçidi, kavşak yol hakkı)
+                                                        │  durma noktaları, hız sınırları
                        Davranış FSM: LANE_KEEP · PREPARE_LC · LANE_CHANGE · BLOCKED · BYPASS
                                                         │  hedef ofsetler, hedef hızlar, durma noktaları
                        Frenet kafes planlayıcı (aday üretimi → fizibilite → çarpışma/ST → maliyet)

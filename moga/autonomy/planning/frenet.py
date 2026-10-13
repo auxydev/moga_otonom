@@ -205,14 +205,16 @@ class FrenetPlanner:
              pred_age: float = 0.0, lon_obstacles: list | None = None,
              time_gap: float = 1.6, standstill_gap: float = 4.0,
              ignore_ids: set | None = None, id_margin: dict | None = None,
-             lat_dists: tuple | None = None, lat_anchor: tuple | None = None) -> PlanResult:
+             lat_dists: tuple | None = None, lat_anchor: tuple | None = None,
+             v_ref_fn=None) -> PlanResult:
         """``start``: dict with s, s_d, s_dd, d, d_d, d_dd (Frenet state).
         ``d_targets``: lateral end offsets to sample; ``d_preferred``: the
         behaviour's lateral goal (cost reference).  ``v_limit_fn(s)`` returns the
         admissible speed along the reference line.  ``lat_anchor`` = (s_end,
         d_end) of the previously selected distance-based lateral manoeuvre: it
         is offered again with its original end point, so that replanning does
-        not keep postponing the lateral motion."""
+        not keep postponing the lateral motion.  ``v_ref_fn(s)``: comfortable
+        speed profile used as progress reference (default ``v_limit_fn``)."""
         cfg = self.cfg
         ts = self.ts
         nT = len(ts)
@@ -344,7 +346,12 @@ class FrenetPlanner:
         feas &= (D[:, -1] >= d_bounds[0] - 0.05) & (D[:, -1] <= d_bounds[1] + 0.05)
         vlim = v_limit_fn(S)
         over = np.maximum(SD - vlim, 0.0)
-        feas &= (over - np.maximum(0.3, 0.05 * vlim)).max(axis=1) < 0.0
+        # a speed excess already present at the start may be reduced with ~2.5 m/s^2
+        excess0 = max(v0 - float(v_limit_fn(np.array([start["s"]]))[0]), 0.0)
+        # (after a short jerk-limited onset)
+        tol = np.maximum(0.3, 0.05 * vlim) + \
+            np.maximum(excess0 - 2.5 * np.maximum(ts - 0.5, 0.0), 0.0)[None, :]
+        feas &= (over - tol).max(axis=1) < 0.0
         # ---------------- collision checking
         coll = np.zeros(K, dtype=bool)
         prox = np.zeros(K)
@@ -406,7 +413,8 @@ class FrenetPlanner:
         sr, vr = start["s"], v0
         for i in range(nT):
             v_ref[i] = vr
-            vr = min(float(v_limit_fn(np.array([sr + vr * cfg.dt]))[0]), vr + cfg.max_accel * 0.75 * cfg.dt)
+            vr = min(float((v_ref_fn or v_limit_fn)(np.array([sr + vr * cfg.dt]))[0]),
+                     vr + cfg.max_accel * 0.75 * cfg.dt)
             vr = max(vr, 0.0)
             sr += vr * cfg.dt
         deficit = np.maximum(v_ref[None, :] - SD, 0.0)

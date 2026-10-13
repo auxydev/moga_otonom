@@ -105,7 +105,9 @@ def urban_grid(nx: int = 3, ny: int = 2, block: float = 120.0, lanes: int = 1,
         signalised = signals and len(arms) >= 3
         if signalised:
             for g, (a_name, a_in, _, _, _) in enumerate(arms):
-                b.add_traffic_light(f"TL_{jid}_{a_name}", list(a_in), group=g, stop_offset=6.5)
+                # far-side signal heads (visible while waiting at the stop line)
+                b.add_traffic_light(f"TL_{jid}_{a_name}", list(a_in), group=g, stop_offset=6.5,
+                                    ahead=2 * J + 1.0)
         if crosswalks and len(arms) >= 3:
             for a_name, _, _, c, h in arms:
                 road_w = 2 * lanes * lane_width + 1.0

@@ -139,8 +139,10 @@ class MapBuilder:
 
     def add_traffic_light(self, tl_id: str, lanes: list[str], group: int,
                           stop_offset: float = 1.0, side_offset: float = 2.0,
-                          height: float = 5.0) -> TrafficLight:
-        """Signal head placed beside the stop line of the controlled lanes."""
+                          height: float = 5.0, ahead: float = 2.0) -> TrafficLight:
+        """Signal head for the controlled lanes, ``ahead`` metres beyond the end
+        of the lanes (e.g. on the far side of the junction, where it stays in
+        the camera's view while waiting at the stop line)."""
         ends = []
         for lid in lanes:
             lane = self.map.lanes[lid]
@@ -150,8 +152,8 @@ class MapBuilder:
         # put the head right of the rightmost controlled lane, slightly after stop line
         right = ends[-1]
         x, y, h, _ = right.centerline.interpolate(right.length)
-        hx = x + 2.0 * math.cos(h) + (0.5 * right.width + side_offset) * math.sin(h)
-        hy = y + 2.0 * math.sin(h) - (0.5 * right.width + side_offset) * math.cos(h)
+        hx = x + ahead * math.cos(h) + (0.5 * right.width + side_offset) * math.sin(h)
+        hy = y + ahead * math.sin(h) - (0.5 * right.width + side_offset) * math.cos(h)
         tl = TrafficLight(tl_id, (hx, hy, height), float(wrap_angle(h + math.pi)), list(lanes),
                           group)
         self.map.traffic_lights[tl_id] = tl

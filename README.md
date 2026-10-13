@@ -59,7 +59,7 @@ python -m pytest -q -n 4
 | M2 – Kamera şerit algılama + şerit takibi | ✅ |
 | M3 – LiDAR/radar algılama + nesne takibi | ✅ |
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ✅ |
-| M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ⏳ |
+| M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ✅ |
 | M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ⏳ |
 
 ## Görseller
@@ -75,6 +75,8 @@ python -m pytest -q -n 4
 | ![](docs/images/m3_highway_tracking.png) | ![](docs/images/m3_acc_stop_and_go.png) |
 | **M4 – boşluk bekle, sollama, sağa dönüş** | **M4 – karşı trafiği bekleyip engeli geçme** |
 | ![](docs/images/m4_overtake.png) | ![](docs/images/m4_rural_bypass.png) |
+| **M5 – şehir içi GPS görevi (ışık, yaya, bypass)** | **M5 – yaya geçidinde yol verme** |
+| ![](docs/images/m5_urban_mission.png) | ![](docs/images/m5_crosswalk.png) |
 
 ## Araç varsayımları
 

@@ -9,13 +9,15 @@ from moga.sim.sensors.gnss import GnssConfig, GnssSensor, GnssZone
 from moga.sim.sensors.inertial import ImuConfig, ImuSensor, WheelConfig, WheelSensor
 from moga.sim.sensors.lidar import LidarConfig, LidarSensor
 from moga.sim.sensors.radar import RadarConfig, RadarSensor
+from moga.sim.sensors.traffic_light import TrafficLightConfig, TrafficLightSensor
 
 
 def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> SensorSuite:
     """Build the Moga sensor set.
 
     ``config`` keys: ``gnss`` (GnssConfig), ``imu`` (ImuConfig), ``wheel``
-    (WheelConfig), ``disable`` (iterable of sensor names).
+    (WheelConfig), ``camera``, ``lidar``, ``radar``, ``traffic_lights``,
+    ``disable`` (iterable of sensor names).
     """
     config = config or {}
     ss = np.random.SeedSequence(seed)
@@ -28,6 +30,7 @@ def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> Senso
         CameraSensor(world, config.get("camera", CameraConfig()), rngs[4]),
         LidarSensor(world, config.get("lidar", LidarConfig()), rngs[5]),
         RadarSensor(world, config.get("radar", RadarConfig()), rngs[6]),
+        TrafficLightSensor(world, config.get("traffic_lights", TrafficLightConfig()), rngs[7]),
     ]
     disabled = set(config.get("disable", ()))
     return SensorSuite([s for s in sensors if s.name not in disabled])
@@ -35,4 +38,4 @@ def make_sensor_suite(world, seed: int = 0, config: dict | None = None) -> Senso
 
 __all__ = ["Sensor", "SensorSuite", "VehicleStatusSensor", "make_sensor_suite", "GnssConfig",
            "GnssZone", "ImuConfig", "WheelConfig", "CameraConfig", "CameraModel",
-           "LidarConfig", "RadarConfig"]
+           "LidarConfig", "RadarConfig", "TrafficLightConfig"]

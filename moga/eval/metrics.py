@@ -6,7 +6,8 @@ from collections import defaultdict
 
 import numpy as np
 
-from moga.common.geometry import box_corners, box_distance, wrap_angle
+from moga.common.geometry import (box_corners, box_distance, boxes_overlap, point_in_polygon,
+                                   wrap_angle)
 from moga.sim.scenario import Criteria, Scenario
 from moga.sim.world import World
 
@@ -20,6 +21,7 @@ class MetricsTracker:
         self.goal_xy = goal_xy
         self.log: dict[str, list] = defaultdict(list)
         self.red_light_violations: list[tuple[float, str]] = []
+        self.crosswalk_violations: list[tuple[float, str]] = []
         self.offroad_time = 0.0
         self.speeding_time = 0.0
         self.goal_reached_t: float | None = None
@@ -108,6 +110,7 @@ class MetricsTracker:
             self.offroad_time += hdt
         # red light crossing by the front bumper
         self._check_red_light(t)
+        self._check_crosswalks(t, fp)
         if "tracks" in self._last_debug:
             # tracks refer to the last lidar frame: extrapolate to the current time
             age = t - self._last_debug.get("tracks_t", t)
@@ -201,6 +204,25 @@ class MetricsTracker:
                     self.red_light_violations.append((t, lane.traffic_light_id))
         self._front_lane = (best.lane_id, best.s)
 
+    def _check_crosswalks(self, t: float, fp: np.ndarray):
+        """Failing to yield: the vehicle moves on a crosswalk while a pedestrian
+        is on it close to the vehicle's path."""
+        w = self.world
+        if w.ego.speed < 0.3 or not w.map.crosswalks:
+            return
+        peds = [a for a in w.active_actors() if a.kind == "pedestrian"]
+        if not peds:
+            return
+        for cw in w.map.crosswalks.values():
+            if not boxes_overlap(fp, cw.polygon):
+                continue
+            for a in peds:
+                inside = point_in_polygon(np.array([[a.x, a.y]]), cw.polygon)[0]
+                if inside and box_distance(fp, a.footprint()) < 4.0:
+                    if not self.crosswalk_violations or self.crosswalk_violations[-1][1] != cw.id:
+                        self.crosswalk_violations.append((t, cw.id))
+                    return
+
     # ------------------------------------------------------------------
     def summary(self) -> dict:
         L = {k: np.asarray(v) for k, v in self.log.items()}
@@ -212,6 +234,10 @@ class MetricsTracker:
         if len(jerk) > 10:
             k = max(1, int(0.2 / dt))
             jerk = np.convolve(jerk, np.ones(k) / k, mode="same")
+        # comfort metrics on 0.2 s averages (as perceived by passengers, free of
+        # single-sample numerical transients)
+        k_avg = max(1, int(0.2 / dt))
+        ay_avg = np.convolve(L["ay"], np.ones(k_avg) / k_avg, mode="same") if len(t) > k_avg else L["ay"]
         lane_d = np.asarray(self.lane_d)
         dist = float(np.sum(np.hypot(np.diff(L["x"]), np.diff(L["y"])))) if len(t) > 1 else 0.0
         s = {
@@ -221,13 +247,14 @@ class MetricsTracker:
             "max_speed": float(np.max(L["v"])) if len(t) else 0.0,
             "collisions": [(c.t, c.other_id, c.other_kind) for c in self.world.collisions],
             "red_light_violations": self.red_light_violations,
+            "crosswalk_violations": self.crosswalk_violations,
             "offroad_time": self.offroad_time,
             "speeding_time": self.speeding_time,
             "goal_reached": self.goal_reached_t is not None,
             "goal_time": self.goal_reached_t,
             "lane_rms": float(np.sqrt(np.mean(lane_d ** 2))) if len(lane_d) else float("nan"),
             "lane_max_abs": float(np.max(np.abs(lane_d))) if len(lane_d) else float("nan"),
-            "max_lat_accel": float(np.max(np.abs(L["ay"]))) if len(t) else 0.0,
+            "max_lat_accel": float(np.max(np.abs(ay_avg))) if len(t) else 0.0,
             "max_long_accel": float(np.max(ax)) if len(t) else 0.0,
             "max_decel": float(-np.min(ax)) if len(t) else 0.0,
             "max_jerk": float(np.max(np.abs(jerk))) if len(jerk) else 0.0,
@@ -268,6 +295,8 @@ def evaluate(summary: dict, c: Criteria, has_mission: bool) -> list[str]:
         f.append("goal not reached")
     if c.no_red_light_violation and summary["red_light_violations"]:
         f.append(f"red light violation: {summary['red_light_violations'][0]}")
+    if c.yield_to_pedestrians and summary.get("crosswalk_violations"):
+        f.append(f"did not yield on crosswalk: {summary['crosswalk_violations'][0]}")
     if c.no_offroad and summary["offroad_time"] > 0.0:
         f.append(f"off-road for {summary['offroad_time']:.1f}s")
     if summary["speeding_time"] > c.max_speeding_s:
