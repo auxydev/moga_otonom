@@ -38,8 +38,10 @@ class VehicleStatusSensor(Sensor):
 
     def measure(self, world: "World"):
         e = world.ego
+        rain = float(np.clip(world.weather.rain + self.rng.normal(0.0, 0.03), 0.0, 1.0)) \
+            if world.weather.rain > 0 else 0.0
         return VehicleStatus(world.t, e.state.soc, e.state.steer, e.speed,
-                             world.last_cmd.hazard_lights)
+                             world.last_cmd.hazard_lights, rain)
 
 
 class SensorSuite:

@@ -104,9 +104,10 @@ class TrafficLightDetection:
 class VehicleStatus:
     t: float
     soc: float
-    steering_angle: float
+    steering_angle: float      # measured road-wheel angle
     speed: float
     hazard_lights: bool = False
+    rain: float = 0.0          # rain / light sensor (windscreen), 0 dry .. 1 heavy rain
 
 
 @dataclass

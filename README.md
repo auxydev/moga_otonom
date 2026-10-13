@@ -7,7 +7,24 @@ simülasyon ortamı.
 Geliştirme milestone mantığıyla ilerler; her milestone sonunda simülasyonda
 kapalı çevrim çalışan bir prototip ve otomatik testler bulunur.
 Yol haritası ve durum: [`docs/MILESTONES.md`](docs/MILESTONES.md) ·
-Mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+Mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
+Güvenlik konsepti: [`docs/SAFETY.md`](docs/SAFETY.md) ·
+Senaryo raporu: [`docs/SCENARIO_REPORT.md`](docs/SCENARIO_REPORT.md)
+
+## Yetenekler (özet)
+
+* **Lokalizasyon**: GNSS (RTK/DGPS/SPS) + IMU + teker odometrisi EKF, kamera şerit
+  ölçümleriyle şerit‑göreli düzeltme, tünelde ölü hesap.
+* **Algılama**: kamera ile şerit algılama (çizgi tipi dahil), LiDAR nesne algılama
+  (zemin ayrıştırma, kümeleme, L‑shape, sınıflandırma), radar füzyonu, çoklu nesne takibi,
+  şerit grafı tabanlı tahmin, trafik ışığı durum kestirimi.
+* **Planlama**: GPS görevinden şerit seviyesinde rota, davranış durum makinesi (ACC, şerit
+  değiştirme, sollama, sağdan gitme, engel geçişi/bypass), Frenet kafes planlayıcı,
+  trafik kuralları (ışık, sarı ikilemi, yaya geçidi, kavşak yol hakkı).
+* **Güvenlik (L4)**: bağımsız AEB, sağlık ve ODD izleme, degrade modlar, MRM ile emniyet
+  şeridine / kenara çekilip durma, MRC, olay veri kaydı (EDR).
+* **Doğrulama**: MogaSim'de 38 kapalı çevrim senaryo + hata enjeksiyonu, deterministik
+  tekrar, CI.
 
 ## Neden kendi simülatörümüz?
 
@@ -60,7 +77,7 @@ python -m pytest -q -n 4
 | M3 – LiDAR/radar algılama + nesne takibi | ✅ |
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ✅ |
 | M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ✅ |
-| M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ⏳ |
+| M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ✅ |
 
 ## Görseller
 
@@ -77,6 +94,8 @@ python -m pytest -q -n 4
 | ![](docs/images/m4_overtake.png) | ![](docs/images/m4_rural_bypass.png) |
 | **M5 – şehir içi GPS görevi (ışık, yaya, bypass)** | **M5 – yaya geçidinde yol verme** |
 | ![](docs/images/m5_urban_mission.png) | ![](docs/images/m5_crosswalk.png) |
+| **M6 – kamera arızası: emniyet şeridine çekilme (MRM → MRC)** | **M6 – ışık algılayıcı arızası: kenara çekilme** |
+| ![](docs/images/m6_camera_failure_pullover.png) | ![](docs/images/m6_urban_light_failure.png) |
 
 ## Araç varsayımları
 

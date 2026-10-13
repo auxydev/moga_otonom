@@ -13,7 +13,7 @@ yeşilken tamamlanmış sayılır (regresyon koruması).
 | M3 | LiDAR/Radar algılama + çoklu nesne takibi | Işın izleme LiDAR, radar, zemin ayrıştırma (RANSAC), harita ROI, kümeleme, L‑shape kutu uydurma, sınıflandırma, KF + Macar algoritması ile takip, radar füzyonu, şerit tabanlı tahmin | Trafik içinde nesneler tespit/takip edilir, ACC ile takip | ✅ |
 | M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ✅ |
 | M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ✅ |
-| M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ⏳ |
+| M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ✅ |
 
 ## Seviye 4 (SAE J3016) gereksinimlerinin karşılanması
 
@@ -31,9 +31,9 @@ insan sürücüye devretme beklenmez.  Bunun yazılımdaki karşılıkları:
 | Güvenli ve konforlu yörünge | `autonomy/planning/frenet` | M4 |
 | Araç kontrolü | `autonomy/control` | M1, M2 |
 | Bağımsız acil fren katmanı | `autonomy/safety/aeb` | M4 |
-| Arıza tespiti ve degrade çalışma | `autonomy/safety/health` | M6 |
+| Arıza tespiti ve degrade çalışma | `autonomy/safety/health`, `supervisor` | M6 |
 | ODD dışına çıkışı algılama | `autonomy/safety/odd` | M6 |
-| Sürücüsüz geri dönüş: Minimum Risk Durumu | `autonomy/safety/mrm` | M6 |
+| Sürücüsüz geri dönüş: Minimum Risk Durumu | `autonomy/safety/supervisor`, `planning/planner` (MRM) | M6 |
 | Olay kaydı / denetlenebilirlik | `autonomy/safety/edr` | M6 |
 
 ## M1 – Lokalizasyon ve GPS tabanlı sürüş (tamamlandı)
@@ -308,3 +308,48 @@ Regresyon: M0–M5'in 30 senaryosu + birim testleri yeşil.
 ![](images/m5_urban_overview.png)
 ![](images/m5_urban_mission.png)
 ![](images/m5_crosswalk.png)
+
+## M6 – Seviye 4 güvenlik (tamamlandı)
+
+Ayrıntılı güvenlik konsepti, ODD tanımı ve hata tepki matrisi:
+[`docs/SAFETY.md`](SAFETY.md).
+
+* **Hata enjeksiyonu** (`sim/faults.py`): sensör kaybı (LiDAR, kamera, radar, GNSS, IMU,
+  teker, trafik ışığı algılayıcı), kamera körlenmesi, LiDAR kirlenmesi, direksiyon / fren
+  etkinlik kaybı, yağmur / sis değişimi – zamanlanmış başlangıç / bitiş.
+* **Sağlık izleyici** (`autonomy/safety/health.py`): canlılık (periyot × 4), makullük
+  (LiDAR nokta sayısı, kamera görüntü istatistiği, lokalizasyon kovaryansı, GNSS
+  tutarlılığı), aktüatör tepkisi (ölçülen direksiyon açısı ↔ komut modeli, ölçülen ↔ komut
+  yavaşlama), 3 s hata mandalı.
+* **ODD izleyici** (`autonomy/safety/odd.py`): yağmur sensörü, LiDAR tabanlı görüş
+  mesafesi, haritalı alan, yol hız limiti.
+* **Güvenlik denetçisi** (`autonomy/safety/supervisor.py`): `NOMINAL → DEGRADED → MRM → MRC`,
+  hata tepki matrisi, MRM mandalı, degrade kısıtları (80 km/h, takip mesafesi ×1.5, keyfi
+  şerit değiştirme / bypass yok).
+* **MRM** (`planning/planner.py`): boşluk kabulüyle şerit şerit sağa ve emniyet şeridine
+  çekilme ya da şerit kenarına yanaşma; duruş noktası kavşak / yaya geçidi dışında;
+  yanal manevra güvenli değilse şerit içinde durma; dörtlü flaşör; LiDAR kaybında radar
+  izleriyle takip.
+* **EDR** (`autonomy/safety/edr.py`): 20 s öncesi + 10 s sonrası, AEB / acil durma / MRM /
+  MRC / arıza tetiklemeli olay kayıtları (JSON).
+* **Simülatör**: araç durum mesajına yağmur sensörü; bayat LiDAR noktalarının AEB'de
+  kullanılmaması; metriklere güvenlik durumları, dörtlü flaşör süresi, EDR olay sayısı.
+* **CI** (`.github/workflows/ci.yml`): lint + birim testleri, milestone başına senaryo
+  matrisi, tüm senaryoların raporu (artifact).
+
+| Senaryo | Hata | Beklenen / gözlenen tepki |
+|---|---|---|
+| `m6_lidar_failure` | 90 km/h'te trafikte LiDAR arızası | MRM şerit içinde durma (≤ 3.5 m/s²), radar ile takip, dörtlü, MRC, EDR |
+| `m6_camera_failure_pullover` | Orta şeritte kamera arızası | trafikteki boşlukla sağ şeride, sonra emniyet şeridine; MRC |
+| `m6_radar_failure_degraded` | Radar arızası | DEGRADED (80 km/h), hedefe varış, MRM yok |
+| `m6_gnss_outage_recovery` | 30 s GNSS alıcı arızası, virajlı yol | DEGRADED, şerit sapması < 0.8 m, GNSS dönünce NOMINAL |
+| `m6_steering_degraded` | Direksiyon etkinliği %55 | tepki uyumsuzluğu tespiti, sağ kenara yanaşıp durma |
+| `m6_heavy_rain_odd_exit` | Yağmur 0.6 → 0.95 | DEGRADED → ODD dışı → emniyet şeridinde MRC |
+| `m6_urban_light_detector_failure` | Şehirde ışık algılayıcı arızası | kavşaktan / geçitten önce kaldırım kenarında MRC |
+| `m6_lidar_degraded` | LiDAR dönüşlerinin %50'si kayıp | DEGRADED, görev tamamlanır |
+
+Regresyon: M0–M6'nın **38 senaryosu** + birim testleri yeşil
+(rapor: [`SCENARIO_REPORT.md`](SCENARIO_REPORT.md)).
+
+![](images/m6_camera_failure_pullover.png)
+![](images/m6_urban_light_failure.png)

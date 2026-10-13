@@ -88,25 +88,33 @@ def write_report(results, path_md: str, path_json: str | None = None):
              f"**geçen:** {sum(r.passed for r in results)}, "
              f"**kalan:** {sum(not r.passed for r in results)}", "",
              "| Senaryo | Milestone | Sonuç | Süre [s] | Mesafe [m] | Vmax [km/h] | Hedef | "
-             "Çarpışma | min TTC [s] | Şerit RMS [m] | Lok. RMSE [m] | MRM | Açıklama |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "Çarpışma | min TTC [s] | maks. yavaşlama [m/s²] | Şerit RMS [m] | Lok. RMSE [m] | "
+             "Güvenlik durumları | Modlar | Açıklama |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     out = []
     for r in results:
         s = r.summary
         ms = scenarios.REGISTRY[r.scenario].milestone if r.scenario in scenarios.REGISTRY else "?"
-        mrm = len(s.get("mrm_events", []))
+        safety = " → ".join(st for _, st in s.get("safety_states", [])) or "-"
+        modes = ", ".join(sorted({m for _, m in s.get("modes", [])}))
         lines.append(
             f"| {r.scenario} | {ms} | {'✅' if r.passed else '❌'} | {_fmt(s.get('duration', 0))} | "
             f"{_fmt(s.get('distance_m', 0))} | {_fmt(s.get('max_speed', 0) * 3.6)} | "
             f"{'✓' if s.get('goal_reached') else '-'} | {len(s.get('collisions', []))} | "
-            f"{_fmt(s.get('min_ttc', float('nan')))} | {_fmt(s.get('lane_rms', float('nan')))} | "
-            f"{_fmt(s.get('loc_rmse', float('nan')))} | {mrm} | "
+            f"{_fmt(s.get('min_ttc', float('nan')))} | {_fmt(s.get('max_decel', float('nan')))} | "
+            f"{_fmt(s.get('lane_rms', float('nan')))} | "
+            f"{_fmt(s.get('loc_rmse', float('nan')))} | {safety} | {modes} | "
             f"{'; '.join(r.failures).splitlines()[0] if r.failures else ''} |")
         out.append({"scenario": r.scenario, "passed": r.passed, "failures": r.failures,
                     "summary": {k: (v if not isinstance(v, float) or math.isfinite(v) else None)
                                 for k, v in s.items()},
                     "wall_time": r.wall_time, "driver_ms_mean": r.driver_ms_mean,
                     "driver_ms_max": r.driver_ms_max})
+    lines += ["", "## Senaryo açıklamaları", ""]
+    for r in results:
+        e = scenarios.REGISTRY.get(r.scenario)
+        if e is not None:
+            lines.append(f"* **{r.scenario}** ({e.milestone}) – {e.builder(seed=0).description}")
     with open(path_md, "w") as f:
         f.write("\n".join(lines) + "\n")
     if path_json:

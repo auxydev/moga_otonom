@@ -53,6 +53,21 @@ kalmazsa önceki yol üzerinde maksimum frenle durma yörüngesi üretilir (`EME
 AEB izlerden ve ham LiDAR noktalarından bağımsız olarak çarpışma riskini değerlendirir ve
 planlayıcının çıktısını geçersiz kılabilir.
 
+## Güvenlik katmanı
+
+Nominal zincire paralel çalışan, ondan bağımsız bileşenler
+(ayrıntı: [`SAFETY.md`](SAFETY.md)):
+
+| Bileşen | Dosya | Görev |
+|---|---|---|
+| Sağlık izleyici | `autonomy/safety/health.py` | sensör canlılığı / makullüğü, aktüatör tepkisi |
+| ODD izleyici | `autonomy/safety/odd.py` | yağmur, görüş, haritalı alan, hız limiti |
+| Güvenlik denetçisi | `autonomy/safety/supervisor.py` | NOMINAL / DEGRADED / MRM / MRC, kısıtlar |
+| MRM planlama | `autonomy/planning/planner.py` | kenara / emniyet şeridine çekilme, şerit içinde durma |
+| AEB | `autonomy/safety/aeb.py` | son savunma acil fren |
+| EDR | `autonomy/safety/edr.py` | olay veri kaydı |
+| Hata enjeksiyonu (sim) | `sim/faults.py` | sensör / aktüatör / çevre hataları |
+
 ## Koordinat sistemleri
 
 | Çerçeve | Tanım |

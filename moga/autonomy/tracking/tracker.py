@@ -74,6 +74,7 @@ class MultiObjectTracker:
         self.max_coast_tent = max_coast_tentative
         self.t = None
         self.ego_xy = None
+        self.radar_fallback = False      # LiDAR failed: radar keeps the tracks alive
 
     # ------------------------------------------------------------ predict
     def predict(self, t: float):
@@ -209,7 +210,7 @@ class MultiObjectTracker:
                 continue
             # inside the LiDAR's reliable range a track must be confirmed by the
             # LiDAR: radar alone (possibly static clutter) does not keep it alive
-            if tr.lidar_hits and ego_xy is not None and \
+            if tr.lidar_hits and ego_xy is not None and not self.radar_fallback and \
                     math.hypot(tr.x[0] - ego_xy[0], tr.x[1] - ego_xy[1]) < 70.0 and \
                     t - tr.last_lidar > (self.max_coast if tr.confirmed else self.max_coast_tent):
                 continue
@@ -307,8 +308,8 @@ class MultiObjectTracker:
                 # radar-only tracks are reported only beyond the range where the
                 # LiDAR reliably sees vehicles (long-range awareness, e.g. for
                 # oncoming traffic), when moving and consistently observed
-                far = self.ego_xy is not None and \
-                    math.hypot(tr.x[0] - self.ego_xy[0], tr.x[1] - self.ego_xy[1]) > 60.0
+                far = self.radar_fallback or (self.ego_xy is not None and math.hypot(
+                    tr.x[0] - self.ego_xy[0], tr.x[1] - self.ego_xy[1]) > 60.0)
                 if not (far and tr.radar_hits >= 4 and tr.speed > 3.0
                         and (self.t is None or self.t - tr.last_update < 0.25)):
                     continue

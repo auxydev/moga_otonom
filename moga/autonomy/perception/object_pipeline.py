@@ -32,6 +32,9 @@ class ObjectPerception:
             self.obstacle_points = self.detector.last_debug.get("obstacle_world", np.zeros((0, 2)))
             self.last_lidar_t = b.t
             updated = True
+        elif b.t - self.last_lidar_t > 0.35 and len(self.obstacle_points):
+            # no recent LiDAR frame: old obstacle points must not be used any more
+            self.obstacle_points = np.zeros((0, 2))
         if self.use_radar and b.radar is not None:
             self.tracker.update_radar(b.t, b.radar, (est.x, est.y, est.yaw, est.v, est.yaw_rate))
             updated = True

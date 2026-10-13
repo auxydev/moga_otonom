@@ -39,6 +39,9 @@ class MetricsTracker:
         self.mrm_events: list[tuple[float, str]] = []
         self.aeb_events: list[float] = []
         self.modes: list[tuple[float, str]] = []
+        self.safety_states: list[tuple[float, str]] = []
+        self.hazard_time = 0.0
+        self.edr_events = 0
         self.perc = {"tp": 0, "fn": 0, "fp": 0, "pos_err": [], "vel_err": [], "cls_ok": 0}
         self._last_debug: dict = {}
 
@@ -73,6 +76,12 @@ class MetricsTracker:
         mode = debug.get("mode")
         if mode is not None and (not self.modes or self.modes[-1][1] != mode):
             self.modes.append((t, mode))
+        sstate = debug.get("safety")
+        if sstate is not None and (not self.safety_states or self.safety_states[-1][1] != sstate):
+            self.safety_states.append((t, sstate))
+        if w.last_cmd.hazard_lights:
+            self.hazard_time += w.dt
+        self.edr_events = max(self.edr_events, int(debug.get("edr_events", 0)))
         if debug.get("mrm_reason") and (not self.mrm_events or self.mrm_events[-1][1] != debug["mrm_reason"]):
             self.mrm_events.append((t, debug["mrm_reason"]))
         if debug.get("aeb_active") and (not self.aeb_events or t - self.aeb_events[-1] > 1.0):
@@ -267,6 +276,10 @@ class MetricsTracker:
             "mrm_events": self.mrm_events,
             "aeb_events": self.aeb_events,
             "modes": self.modes,
+            "safety_states": self.safety_states,
+            "hazard_time": self.hazard_time,
+            "edr_events": self.edr_events,
+            "final_pose": (float(L["x"][-1]), float(L["y"][-1])) if len(t) else (float("nan"),) * 2,
         }
         P = self.perc
         if P["tp"] + P["fn"] > 0:

@@ -30,6 +30,10 @@ from moga.autonomy.planning.planner import PlanOutput, RouteTracker, TacticalPla
 from moga.autonomy.planning.route_path import RoutePath, build_route_path, speed_profile
 from moga.autonomy.planning.route_planner import Route, RoutePlanner, RouteStep
 from moga.autonomy.safety.aeb import AEB
+from moga.autonomy.safety.edr import EventDataRecorder
+from moga.autonomy.safety.health import FAILED, HealthMonitor
+from moga.autonomy.safety.odd import ODDMonitor
+from moga.autonomy.safety.supervisor import SafetyState, SafetySupervisor
 from moga.common.messages import ControlCommand, Mission, SensorBundle, TurnSignal
 from moga.common.vehicle_params import MOGA, VehicleParams
 from moga.map.hd_map import HDMap
@@ -52,6 +56,8 @@ class StackConfig:
     use_radar: bool = True
     use_aeb: bool = True
     use_traffic_lights: bool = True  # traffic light perception + traffic rules
+    use_safety: bool = True          # health / ODD monitoring, degraded modes, MRM
+    edr_dir: str | None = None       # write event data records here (JSON)
     time_gap: float = 1.6            # s, ACC following time gap
     standstill_gap: float = 4.0      # m
     plan_period: float = 0.1         # s
@@ -102,6 +108,12 @@ class AutonomyStack:
         self.obstacles = []
         # safety
         self.aeb = AEB(params)
+        self.health = HealthMonitor(params)
+        self.odd = ODDMonitor(hd_map)
+        self.supervisor = SafetySupervisor()
+        self.safety = SafetyState()
+        self.edr = EventDataRecorder(out_dir=self.cfg.edr_dir)
+        self._failed_prev: set[str] = set()
         self._last_radar = None
         # state
         self.mode = "INIT"
@@ -187,6 +199,10 @@ class AutonomyStack:
             self._last_radar = b.radar
         if self.lights is not None and (b.traffic_lights is not None or self.lights.lights):
             self.lights.update(b.t, b.traffic_lights, est)
+        if self.cfg.use_safety:
+            self._supervise(b, est, dt)
+            if self.safety.state == "MRC":
+                return self._mrc(b.t, est)
         if self.route is None:
             if not self.localizer.ready:
                 return self._localizing(est, dt)
@@ -199,7 +215,59 @@ class AutonomyStack:
             cmd = self._step_route(est, dt)
         else:
             cmd = self._step_frenet(b.t, est, dt)
-        return self._safety(b.t, est, cmd)
+        cmd = self._safety(b.t, est, cmd)
+        self._record(b.t, est)
+        return cmd
+
+    # -------------------------------------------------------- supervision
+    def _urban_signals_ahead(self) -> bool:
+        ref = self.tactical.ref
+        return ref is not None and any(self.map.lanes[l].traffic_light_id is not None
+                                       for l in ref.lanes)
+
+    def _supervise(self, b: SensorBundle, est, dt: float):
+        rep = self.health.update(b.t, dt, b, self.localizer, self.cmd.steering_angle,
+                                 self.cmd.acceleration)
+        odd = self.odd.update(b.t, b, est)
+        prev = self.safety.state
+        self.safety = self.supervisor.update(b.t, est.v, rep, odd, self._urban_signals_ahead())
+        if self.objects is not None:
+            # without the LiDAR the radar alone keeps track of the traffic
+            self.objects.tracker.radar_fallback = rep.status.get("lidar") == FAILED
+        failed = set(rep.failed())
+        for comp in sorted(failed - self._failed_prev):
+            self.edr.trigger(b.t, f"fault:{comp}", rep.detail.get(comp, ""))
+        self._failed_prev = failed
+        if self.safety.state != prev and self.safety.state in ("MRM", "MRC"):
+            self.edr.trigger(b.t, self.safety.state.lower(), self.safety.reason)
+
+    def _mrc(self, t: float, est) -> ControlCommand:
+        """Minimal risk condition: standstill, brake held, hazard lights."""
+        self.mode = "MRC"
+        self.cmd = ControlCommand(0.0, -3.0, TurnSignal.NONE, hazard_lights=True)
+        self._dbg = self._common_debug(est)
+        self._dbg.update({"mode": "MRC", "safety": "MRC", "mrm_reason": self.safety.reason,
+                          "edr_events": len(self.edr.events),
+                          "hud": f"MRC – {self.safety.reason}"})
+        self._record(t, est)
+        return self.cmd
+
+    def _record(self, t: float, est):
+        if est is None:
+            return
+        near = math.inf
+        if self.objects is not None:
+            for tr in self.objects.tracks:
+                near = min(near, math.hypot(tr.x - est.x, tr.y - est.y))
+        self.edr.record(t, {"x": round(est.x, 2), "y": round(est.y, 2), "yaw": round(est.yaw, 4),
+                            "v": round(est.v, 2), "steer": round(self.cmd.steering_angle, 4),
+                            "acc": round(self.cmd.acceleration, 2), "mode": self.mode,
+                            "safety": self.safety.state, "failed": sorted(self._failed_prev),
+                            "nearest_object": round(near, 1) if math.isfinite(near) else None})
+        if self.mode == "AEB":
+            self.edr.trigger(t, "aeb")
+        elif self.mode == "EMERGENCY_STOP":
+            self.edr.trigger(t, "emergency_stop")
 
     # ------------------------------------------------- tactical (default)
     def _step_frenet(self, t: float, est, dt: float) -> ControlCommand:
@@ -209,8 +277,11 @@ class AutonomyStack:
             preds = self.objects.predictions if self.objects is not None else []
             age = (t - self.objects.tracker.t) if (self.objects is not None and
                                                   self.objects.tracker.t is not None) else 0.0
+            safety = self.safety if self.cfg.use_safety else None
             out = self.tactical.plan(t, est, preds, self.route_tracker, self.cmd.acceleration,
-                                     pred_age=max(age, 0.0), lights=self.lights)
+                                     pred_age=max(age, 0.0), lights=self.lights,
+                                     v_cap=safety.v_cap if safety is not None else None,
+                                     safety=safety)
             if out.replan_route:
                 lane = self.tactical.cur_lane
                 s_lane, _ = self.map.lanes[lane].centerline.project(np.array([est.x, est.y]))
@@ -229,9 +300,12 @@ class AutonomyStack:
         state = out.decision.state
         if state in ("LANE_KEEP", "BLOCKED") and out.debug.get("wait"):
             state = out.debug["wait"]          # waiting for a light / yielding
+        if self.safety.state == "MRM":
+            state = "MRM_PULLOVER" if self.safety.mrm == "pullover" else "MRM_STOP"
         self.mode = self.mode if self.mode == "GOAL_REACHED" else (
             "EMERGENCY_STOP" if out.emergency else state)
-        self.cmd = ControlCommand(delta, acc, sig, emergency=out.emergency)
+        hazard = self.safety.hazard and self.cfg.use_safety
+        self.cmd = ControlCommand(delta, acc, sig, hazard_lights=hazard, emergency=out.emergency)
         self._debug_frenet(est, out)
         return self.cmd
 
@@ -388,6 +462,10 @@ class AutonomyStack:
         dbg["trajectory"] = np.column_stack([tr.x, tr.y])
         dbg["candidates"] = out.debug.get("candidates", [])
         dbg["behavior"] = out.decision.state
+        dbg["safety"] = self.safety.state
+        dbg["edr_events"] = len(self.edr.events)
+        if self.safety.state in ("MRM", "MRC"):
+            dbg["mrm_reason"] = self.safety.reason
         stops = ",".join(w for _, w in out.debug.get("stops", []))
         if self.lights is not None:
             near = [f"{k[3:]}:{v[0][0].upper()}" for k, v in self.lights.states().items()
@@ -395,7 +473,8 @@ class AutonomyStack:
             if near:
                 stops += ("  " if stops else "") + "TL " + " ".join(near[:3])
         gaps = " ".join(f"{s}:{g:.0f}m@{v:.0f}" for s, g, v in out.debug.get("gaps", []))
-        dbg["hud"] = (f"{out.decision.state}{'/' + out.decision.reason if out.decision.reason else ''}"
+        safety = "" if self.safety.state == "NOMINAL" else f"[{self.safety.state}: {self.safety.reason}]\n"
+        dbg["hud"] = (f"{safety}{out.decision.state}{'/' + out.decision.reason if out.decision.reason else ''}"
                       f"  lane={out.debug.get('lane')}  v_des={out.debug.get('v_des', 0) * 3.6:4.0f}km/h"
                       f"  cand={out.debug.get('n_feas')}/{out.debug.get('n_cand')}"
                       f"{'  stop:' + stops if stops else ''}{'  ' + gaps if gaps else ''}")

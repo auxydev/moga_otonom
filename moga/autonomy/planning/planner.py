@@ -131,6 +131,8 @@ class TacticalPlanner:
         self.bypass_v = 9.0          # passing speed in the adjacent / opposite lane
         self.last: PlanResult | None = None
         self.rules = TrafficRules(hd_map, params)
+        self.mrm_lc_lane: str | None = None
+        self.mrm_stop_xy: tuple[float, float] | None = None
 
     # ------------------------------------------------------------ helpers
     def _lane_s(self, lane_id: str, x: float, y: float, hint: float | None = None):
@@ -140,7 +142,7 @@ class TacticalPlanner:
         return cl.project(np.array([x, y]))
 
     def _update_current_lane(self, est: LocalizationEstimate, route: RouteTracker | None,
-                             allow_switch: bool):
+                             allow_switch: bool, allow_shoulder: bool = False):
         if self.cur_lane is None:
             self.cur_lane = est.lane_id
             self.lane_s_prev = None
@@ -170,7 +172,7 @@ class TacticalPlanner:
         # crossed into a same-direction neighbour
         if allow_switch and abs(d) > 0.5 * lane.width + 0.1:
             nb = lane.left_neighbor if d > 0 else lane.right_neighbor
-            if nb is not None and self.map.lanes[nb].lane_type != LaneType.SHOULDER:
+            if nb is not None and (allow_shoulder or self.map.lanes[nb].lane_type != LaneType.SHOULDER):
                 s2, d2 = self._lane_s(nb, est.x, est.y)
                 if abs(d2) < abs(d):
                     self.cur_lane = nb
@@ -337,6 +339,43 @@ class TacticalPlanner:
             out.append(PredictedObject(tr, [(1.0, traj)], pr.dt))
         return out
 
+    def _mrm_decide(self, mrm: str, v: float, right_nb: str | None, objs: dict) -> BehaviorDecision:
+        """Minimal risk manoeuvre: pull over lane by lane to the shoulder (or
+        the rightmost lane) when the gaps allow it, then stop; or stop in lane."""
+        if mrm == "pullover" and right_nb is not None:
+            if self.mrm_lc_lane == right_nb or BehaviorPlanner.gap_ok(objs["right"], v, urgent=True):
+                self.mrm_lc_lane = right_nb
+                return BehaviorDecision("LANE_CHANGE", "right", "mrm", 2)
+            return BehaviorDecision("PREPARE_LC", "right", "mrm", 2)
+        return BehaviorDecision("MRM_STOP", "cur", mrm, 0)
+
+    def _mrm_stop(self, ref: ReferenceLine, s_ego: float, v: float, mrm: str) -> float:
+        """Stop position of the MRM (fixed once chosen): comfortable deceleration,
+        not inside a junction / on a crosswalk."""
+        if self.mrm_stop_xy is not None:
+            s, _ = ref.line.project(np.array(self.mrm_stop_xy), s_hint=s_ego + 20.0, window=200.0)
+            return float(s)
+        # (mean deceleration; the stopping profile peaks at ~1.5x this value)
+        a = 2.0 if mrm == "pullover" else 2.2
+        s_stop = s_ego + max(10.0, v * v / (2.0 * a))
+        front = self.p.front_bumper
+        # keep junction areas and crosswalks free
+        zones = []
+        for k, lid in enumerate(ref.lanes):
+            ln = self.map.lanes[lid]
+            if ln.in_junction:
+                zones.append((ref.offsets[k] - 8.0, ref.offsets[k] + ln.length + 8.0))
+            for _, s0, s1 in self.map.crosswalks_on_lane(lid):
+                zones.append((ref.offsets[k] + s0 - 3.0, ref.offsets[k] + s1 + 3.0))
+        for z0, z1 in sorted(zones):
+            if s_stop + front > z0 and s_stop - self.p.rear_bumper < z1:
+                before = z0 - front
+                s_stop = before if v * v / (2.0 * max(before - s_ego, 0.1)) <= 3.5 else \
+                    z1 + self.p.rear_bumper + 1.0
+        x, y, _, _ = ref.line.interpolate(s_stop)
+        self.mrm_stop_xy = (float(x), float(y))
+        return float(s_stop)
+
     @staticmethod
     def _frozen(pr: PredictedObject) -> PredictedObject:
         tr = pr.track
@@ -394,10 +433,16 @@ class TacticalPlanner:
     # --------------------------------------------------------------- main
     def plan(self, t: float, est: LocalizationEstimate, preds: list[PredictedObject],
              route: RouteTracker | None, accel: float, pred_age: float = 0.0,
-             v_cap: float | None = None, lights=None) -> PlanOutput:
+             v_cap: float | None = None, lights=None, safety=None) -> PlanOutput:
         p = self.p
+        mrm = safety.mrm if safety is not None and safety.state in ("MRM", "MRC") else None
+        if mrm is not None and self.behavior.state != "MRM":
+            self.behavior.state = "MRM"          # the behaviour layer is overridden
+        gap_scale = safety.gap_scale if safety is not None else 1.0
+        time_gap = self.time_gap * gap_scale
         bypassing = self.behavior.state == "BYPASS"
-        s_lane, d_lane = self._update_current_lane(est, route, allow_switch=not bypassing)
+        s_lane, d_lane = self._update_current_lane(est, route, allow_switch=not bypassing,
+                                                   allow_shoulder=mrm == "pullover")
         replan = False
         if route is not None and not route.update(self.cur_lane):
             replan = True
@@ -431,7 +476,7 @@ class TacticalPlanner:
             need = None
         remaining = route.remaining(self.map, s_lane) if route is not None else math.inf
         left_nb = self.refs.neighbor(self.cur_lane, "left")
-        right_nb = self.refs.neighbor(self.cur_lane, "right")
+        right_nb = self.refs.neighbor(self.cur_lane, "right", allow_shoulder=mrm == "pullover")
         # progress of an ongoing bypass manoeuvre (tracked by object id)
         bypass_done = False
         if self.behavior.state == "BYPASS":
@@ -444,16 +489,17 @@ class TacticalPlanner:
                 bypass_done = ob["s"] + ob["half_l"] < s_ego + p.rear_bumper - 2.0
         # no discretionary lane changes / bypassing close to a junction
         near_junction = s_junc - s_ego < max(30.0, 2.5 * est.v) or lane.in_junction
-        lc_ok = {side: self._lc_allowed(self.cur_lane, side) and (need is not None or not near_junction)
+        discretionary = not near_junction and (safety is None or safety.allow_lane_change)
+        lc_ok = {side: self._lc_allowed(self.cur_lane, side) and (need is not None or discretionary)
                  for side in ("left", "right")}
         ctx = BehaviorContext(
             t, est.v, v_des, {"cur": self.cur_lane, "left": left_nb, "right": right_nb}, objs,
             need, need_dist, remaining, lc_ok,
-            can_bypass=not near_junction,
+            can_bypass=not near_junction and (safety is None or safety.state == "NOMINAL"),
             keep_right_ok=bool(route is not None and right_nb is not None and right_nb in route.lane_set),
             bypass_done=bypass_done)
         was_bypass = self.behavior.state == "BYPASS"
-        dec = self.behavior.decide(ctx)
+        dec = self._mrm_decide(mrm, est.v, right_nb, objs) if mrm is not None else self.behavior.decide(ctx)
         if dec.bypass and not was_bypass:
             # remember the obstacle we are passing
             leads = [o for o in obj_info if o["side"] == "cur" and o["s"] >= s_ego and o["static"]]
@@ -496,6 +542,13 @@ class TacticalPlanner:
                 hi = d_pref + half_ok
             else:
                 lo = d_pref - half_ok
+        elif dec.state == "MRM_STOP":
+            on_shoulder = lane.lane_type == LaneType.SHOULDER
+            if mrm == "pullover" and not on_shoulder and right_nb is None:
+                # no shoulder: stop at the right edge of the lane
+                d_pref = -max(0.5 * w - 0.5 * p.width - 0.2, 0.0)
+                lo = d_pref - 0.3
+            d_targets = [d_pref, 0.0] if d_pref != 0.0 else [0.0]
         elif dec.bypass and bypass_go:
             # pass on the left with the needed clearance
             need_off = 0.5 * w + p.width * 0.5 + 0.5
@@ -520,7 +573,7 @@ class TacticalPlanner:
             if math.isfinite(o.lead_gap) and o.lead_gap < 150.0 and not (dec.bypass and side == "cur"):
                 s_rear = s_ego + p.front_bumper + o.lead_gap
                 for T in (3.0, 5.0):
-                    tgt = s_rear + o.lead_v * T - (self.s0 + self.time_gap * o.lead_v) - p.front_bumper
+                    tgt = s_rear + o.lead_v * T - (self.s0 + time_gap * o.lead_v) - p.front_bumper
                     lts.append(LongTarget("follow", v=o.lead_v, s=max(tgt, s_ego)))
                 gap_info.append((side, o.lead_gap, o.lead_v))
         stops = list(self.extra_stops)
@@ -549,6 +602,8 @@ class TacticalPlanner:
                 (s_ego + cur.lead_gap - s0_static, "obstacle"))
         for rs in rule_stops:
             stops.append((rs.s, rs.reason))
+        if dec.state == "MRM_STOP":
+            stops.append((self._mrm_stop(ref, s_ego, est.v, mrm), "mrm"))
         for s_stop, why in stops + opt_stops:
             lts.append(LongTarget("stop", v=0.0, s=s_stop))
         # comfortable stop as an always-available fallback
@@ -620,7 +675,7 @@ class TacticalPlanner:
                                            and self.prev.ref_key == ref.lanes else None),
                                v_ref_fn=vref_fn,
                                obstacle_cls_margin=margins, pred_age=pred_age, lon_obstacles=lon_obs,
-                               time_gap=self.time_gap, standstill_gap=self.s0,
+                               time_gap=time_gap, standstill_gap=self.s0,
                                ignore_ids=rear_same if dec.state != "LANE_CHANGE" else None,
                                id_margin={self.bypass_id: 0.6} if dec.bypass else None)
         emergency = False
