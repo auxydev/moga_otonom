@@ -107,6 +107,8 @@ python scripts/replay_kitti.py --root /data/kitti --drives 5 15 --figures 150 --
 | ![](docs/images/m5_urban_mission.png) | ![](docs/images/m5_crosswalk.png) |
 | **M6 – kamera arızası: emniyet şeridine çekilme (MRM → MRC)** | **M6 – ışık algılayıcı arızası: kenara çekilme** |
 | ![](docs/images/m6_camera_failure_pullover.png) | ![](docs/images/m6_urban_light_failure.png) |
+| **M7 – MetaDrive (bağımsız simülatör): döner kavşak + kavşak, 528 m** | |
+| ![](docs/images/m7_metadrive_seed16.png) | |
 
 ## Araç varsayımları
 

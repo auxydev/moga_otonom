@@ -383,4 +383,11 @@ Ayrıntılar, sayılar ve gerçek araca geçiş için gerekenler:
   eğimli zemin, sentetik KITTI kaydı, eşleştirme, harita dönüşümü, DBW, MetaDrive
   bölümü – MetaDrive kuruluysa).
 
-<!-- METADRIVE_SUMMARY -->
+| Doğrulama | Sonuç |
+|---|---|
+| KITTI 0015 (yol), sürüş koridoru | araç algılama R 0.94 / P 0.61, sınıf doğruluğu 1.00, konum hatası 0.21 m, şerit algılama %100 |
+| KITTI 0005 (şehir), sürüş koridoru | R 0.72 / P 0.30 – geometrik dedektör yol kenarı nesnelerini ayıramıyor (öğrenmeli dedektör gerekli) |
+| MetaDrive, 24 rastgele harita (trafik, kazalar) | 23/24 hedefe varış, 0 yoldan çıkma, 1 çarpışma (trafik aracı duran Moga'ya çarptı), 8.0 km |
+| MogaSim regresyonu | 38/38 senaryo + birim testleri yeşil |
+
+![](images/m7_metadrive_seed16.png)

@@ -171,7 +171,32 @@ python3.11 -m venv .venv-metadrive && .venv-metadrive/bin/pip install -r require
 
 ### Sonuçlar
 
-<!-- METADRIVE_RESULTS -->
+24 bölüm, her biri farklı bir prosedürel yol ağında (rastgele bloklar: düz,
+viraj, giriş / çıkış rampası, dört yollu kavşak, T kavşak, döner kavşak),
+MetaDrive IDM trafiğiyle; sonuç MetaDrive'ın kendi bitiş ölçütüdür.
+
+| Set | Harita | Trafik yoğunluğu | Kaza | Hedefe varış | Çarpışma | Yoldan çıkma | Toplam yol | Ort. hız | AEB'li bölüm |
+|---|---|---|---|---|---|---|---|---|---|
+| A (seed 0–7) | 3 blok | 0.10 | – | **8/8** | 0 | 0 | 2.6 km | 22 km/h | 1 |
+| B (seed 10–17) | 4 blok | 0.15 | – | **8/8** | 0 | 0 | 3.1 km | 19 km/h | 3 |
+| C (seed 20–27) | 3 blok | 0.10 | her blokta (arızalı araç, koni, üçgen) | **7/8** | 1 | 0 | 2.4 km | 20 km/h | 1 |
+| **Toplam** | | | | **23/24** | 1 | 0 | **8.0 km** | | 5 |
+
+* Hiçbir bölümde güvenlik denetçisi `NOMINAL` dışına çıkmadı (sensör / lokalizasyon
+  sorunu yok); yollarda şerit değiştirme, rampalardan katılma, kavşakta yol verme ve
+  döner kavşak geçişi yapıldı.
+* **Çarpışma (C, seed 22)**: Moga aracı kendi şeridinde, kavşak girişinin 1.6 m
+  gerisinde yol veriyordu (0.06 m/s); kavşaktan sola dönen bir MetaDrive trafik
+  aracı bağlayıcı şeridinden 1.15 m sapıp köşeyi keserek duran araca çarptı.
+  MetaDrive ölçütüyle başarısız sayılır; Moga'nın hatalı bir hareketi yok, ancak
+  bu tür bir saldırgan / hatalı dönüşe karşı (duran araçla) yapılabilecek bir
+  kaçınma da yok.
+* **Sert fren**: 24 bölümün 8'inde > 4 m/s² yavaşlama (5'inde AEB) oldu.  Hepsi
+  işaretsiz kavşaklarda ya da yan yoldan kesen trafikte: yol verme kararı geç
+  geldiğinde planlayıcı acil durma seçiyor (en yakın mesafe 0.30 m, seed 25).
+* Bölüm başına hesap süresi ≈ 1–3 dk (LiDAR ışın izleme + yığın, tek çekirdek).
+
+![MetaDrive seed 16: döner kavşak ve kavşak içeren 528 m'lik rota](images/m7_metadrive_seed16.png)
 
 **MetaDrive'ın bulduğu yığın hataları** (MogaSim'in uzun yol segmentlerinde
 ortaya çıkmayan; düzeltildi ve MogaSim regresyonu yeşil):
