@@ -1,6 +1,6 @@
 # MogaSim senaryo raporu
 
-Oluşturulma: 2026-10-13 17:49:46
+Oluşturulma: 2026-10-14 11:35:01
 
 **Toplam:** 38 senaryo, **geçen:** 38, **kalan:** 0
 
@@ -24,7 +24,7 @@ Oluşturulma: 2026-10-13 17:49:46
 | m3_lead_hard_brake | M3 | ✅ | 35.00 | 642.75 | 93.05 | - | 0 | 4.41 | 8.56 | 0.29 | 0.01 | NOMINAL | EMERGENCY_STOP, LANE_CHANGE, LANE_KEEP, PREPARE_LC |  |
 | m3_stopped_vehicle | M3 | ✅ | 45.00 | 489.22 | 54.49 | - | 0 | 3.84 | 2.83 | 0.93 | 0.02 | NOMINAL | BLOCKED, BYPASS, LANE_KEEP |  |
 | m3_pedestrian_jaywalk | M3 | ✅ | 45.52 | 442.59 | 57.92 | ✓ | 0 | 2.05 | 7.28 | 0.06 | 0.02 | NOMINAL | EMERGENCY_STOP, GOAL_REACHED, LANE_KEEP |  |
-| m4_overtake_slow_truck | M4 | ✅ | 87.66 | 1756.88 | 90.68 | ✓ | 0 | 7.23 | 2.82 | 0.18 | 0.01 | NOMINAL | GOAL_REACHED, LANE_CHANGE, LANE_KEEP, PREPARE_LC |  |
+| m4_overtake_slow_truck | M4 | ✅ | 87.46 | 1756.76 | 90.68 | ✓ | 0 | 7.23 | 2.82 | 0.18 | 0.01 | NOMINAL | GOAL_REACHED, LANE_CHANGE, LANE_KEEP, PREPARE_LC |  |
 | m4_cut_in | M4 | ✅ | 59.74 | 1246.59 | 90.28 | ✓ | 0 | ∞ | 3.00 | 0.01 | 0.01 | NOMINAL | GOAL_REACHED, LANE_KEEP |  |
 | m4_static_obstacle_lane_change | M4 | ✅ | 66.36 | 1157.37 | 93.07 | ✓ | 0 | 2.53 | 4.95 | 0.18 | 0.01 | NOMINAL | GOAL_REACHED, LANE_CHANGE, LANE_KEEP, PREPARE_LC |  |
 | m4_route_lane_changes_traffic | M4 | ✅ | 60.56 | 1216.08 | 91.24 | ✓ | 0 | 20.66 | 2.30 | 0.20 | 0.01 | NOMINAL | LANE_CHANGE, LANE_KEEP, PREPARE_LC |  |
