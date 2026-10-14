@@ -1,15 +1,26 @@
 # Separate Python 3.11 environment for the MetaDrive closed-loop tests
-# (scripts/run_metadrive.py).  MetaDrive 0.2.6 predates NumPy 1.24 / gym 0.26,
-# hence the pins.  No GPU needed (headless, no rendering).
+# (scripts/run_metadrive.py).  MetaDrive 0.2.6 declares pins that no longer
+# install on Python 3.11 (gym 0.19, panda3d 1.10.8), so it is installed in two
+# steps with these tested versions:
 #   python3.11 -m venv .venv-metadrive
 #   .venv-metadrive/bin/pip install -r requirements-metadrive.txt
-metadrive-simulator==0.2.6.0
-gym==0.23.1
+#   .venv-metadrive/bin/pip install --no-deps metadrive-simulator==0.2.6.0
+# (Windows: .venv-metadrive\Scripts\pip ...).  No GPU needed; the optional
+# 3-D window (--render) needs OpenGL.
 numpy==1.23.5
 scipy==1.11.4
-protobuf==3.20.3
 matplotlib==3.8.4
-opencv-python-headless==4.8.1.78
-panda3d==1.10.16
 pillow>=10.0
+gym==0.23.1
+protobuf==3.20.3
+panda3d==1.10.16
+panda3d-gltf==0.13
+panda3d-simplepbr==0.10
+opencv-python-headless==4.8.1.78
+pandas==2.0.3
+seaborn
+pygame
+tqdm
+yapf
+lxml
 pytest>=8.0

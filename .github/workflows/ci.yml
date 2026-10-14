@@ -55,8 +55,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install (MetaDrive pins)
-        run: pip install -r requirements-metadrive.txt
+      - name: Install (MetaDrive pins, then MetaDrive without its outdated pins)
+        run: |
+          pip install -r requirements-metadrive.txt
+          pip install --no-deps metadrive-simulator==0.2.6.0
       - name: Bridge tests
         run: python -m pytest -q tests/test_m7_real_data.py
       - name: Episodes

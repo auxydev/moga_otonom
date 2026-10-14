@@ -439,10 +439,12 @@ def _box_gap(a, b) -> float:
 
 
 def make_env(seed: int, map_spec, traffic_density: float = 0.15, accident_prob: float = 0.0,
-             traffic_mode: str = "trigger", horizon: int = 6000):
+             traffic_mode: str = "trigger", horizon: int = 6000, render: bool = False):
+    """``render``: open MetaDrive's 3-D window (needs OpenGL; the stack's
+    sensors do not use it)."""
     from metadrive import MetaDriveEnv
     return MetaDriveEnv(dict(
-        use_render=False, offscreen_render=False, map=map_spec, start_seed=seed, environment_num=1,
+        use_render=render, offscreen_render=False, map=map_spec, start_seed=seed, environment_num=1,
         traffic_density=traffic_density, accident_prob=accident_prob, traffic_mode=traffic_mode,
         decision_repeat=1, physics_world_step_size=DT, horizon=horizon,
         random_spawn_lane_index=False, random_lane_width=False, random_agent_model=False,
@@ -468,15 +470,17 @@ def route_polyline(md_vehicle) -> Polyline:
 def run_episode(seed: int, map_spec=3, traffic_density: float = 0.15, accident_prob: float = 0.0,
                 max_time: float = 240.0, stack_overrides: dict | None = None,
                 origin: GeoOrigin = GeoOrigin(39.92077, 32.85411, 900.0), record: bool = True,
-                verbose: int = 0) -> EpisodeResult:
+                verbose: int = 0, render: bool = False) -> EpisodeResult:
     """One MetaDrive episode driven by the Moga stack.
 
     ``map_spec``: number of random blocks or a block string (``"SCrRX"``);
     ``record``: keep the trajectory / traffic traces for plotting;
     ``verbose``: 1 status every 5 s, 2 every second (+ localisation error),
-    3 adds ground-truth traffic vs. tracks, 5 adds AEB / emergency details."""
+    3 adds ground-truth traffic vs. tracks, 5 adds AEB / emergency details;
+    ``render``: show the episode in MetaDrive's 3-D window."""
     from moga.autonomy.stack import AutonomyStack, StackConfig
-    env = make_env(seed, map_spec, traffic_density, accident_prob, horizon=int(max_time / DT) + 10)
+    env = make_env(seed, map_spec, traffic_density, accident_prob, horizon=int(max_time / DT) + 10,
+                   render=render)
     res = EpisodeResult(seed, str(map_spec))
     wall0 = time.time()
     try:

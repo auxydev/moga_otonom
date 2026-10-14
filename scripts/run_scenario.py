@@ -4,6 +4,7 @@
 Examples
 --------
     python scripts/run_scenario.py --list
+    python scripts/run_scenario.py m5_urban_mission --live            # watch it in a window
     python scripts/run_scenario.py m1_gps_loop --gif out/m1.gif --overview out/m1.png
     python scripts/run_scenario.py --milestone M4 --report out/report.md
     python scripts/run_scenario.py --all --report docs/SCENARIO_REPORT.md
@@ -35,6 +36,10 @@ def main():
     ap.add_argument("--report", help="markdown report path")
     ap.add_argument("--json", help="json report path")
     ap.add_argument("--workers", type=int)
+    ap.add_argument("--live", action="store_true",
+                    help="show the run in a window while it is simulated")
+    ap.add_argument("--speed", type=float, default=1.0,
+                    help="live view: 1 = real time, 2 = twice as fast, 0 = as fast as possible")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
 
@@ -49,6 +54,10 @@ def main():
         names = scenarios.names(a.milestone)
     if not names:
         ap.error("no scenario selected")
+    if a.live:
+        from moga.viz.live import run_live
+        res = run_live(names[0], a.driver, a.seed, a.speed)
+        return 0 if res is None or res.passed else 1
     for d in (a.gif, a.png, a.overview, a.report, a.json):
         if d and os.path.dirname(d):
             os.makedirs(os.path.dirname(d), exist_ok=True)

@@ -48,6 +48,9 @@ köprülenebilir.
 
 ## Kurulum
 
+Kendi bilgisayarınızda çalıştırmak için adım adım kılavuz (Windows / macOS /
+Linux, tek komutla kurulum + demo, canlı izleme, MetaDrive): **[`KURULUM.md`](KURULUM.md)**
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -57,6 +60,9 @@ pip install -r requirements.txt
 ```bash
 # senaryoları listele
 python scripts/run_scenario.py --list
+
+# bir senaryoyu pencerede canlı izle
+python scripts/run_scenario.py m5_urban_mission --live
 
 # tek senaryo + GIF / genel bakış görseli
 python scripts/run_scenario.py m1_urban_route --gif out/urban.gif --overview out/urban.png

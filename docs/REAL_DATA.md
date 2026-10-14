@@ -147,7 +147,9 @@ bağımsız bir testtir.  GPU gerektirmez.
 
 ```bash
 python3.11 -m venv .venv-metadrive && .venv-metadrive/bin/pip install -r requirements-metadrive.txt
+.venv-metadrive/bin/pip install --no-deps metadrive-simulator==0.2.6.0
 .venv-metadrive/bin/python scripts/run_metadrive.py --seeds 0 1 2 3 --map 3 --density 0.1 --plot --out out/metadrive
+.venv-metadrive/bin/python scripts/run_metadrive.py --seeds 16 --map 4 --density 0.15 --render   # 3B pencere
 ```
 
 **Köprü** (`bridges/metadrive.py`), her 20 ms fizik adımında:

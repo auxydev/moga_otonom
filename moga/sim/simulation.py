@@ -79,7 +79,8 @@ class Simulation:
     def __init__(self, scenario: Scenario, driver: Driver,
                  sensors: SensorSuite | Callable[[World, int], SensorSuite] | None = None,
                  frame_dt: float | None = 0.1, params: VehicleParams = MOGA,
-                 frame_hook: Callable[[World, Driver], dict] | None = None):
+                 frame_hook: Callable[[World, Driver], dict] | None = None,
+                 on_frame: Callable[[dict], None] | None = None):
         self.scn = scenario
         self.params = params
         self.world = build_world(scenario, params)
@@ -92,6 +93,7 @@ class Simulation:
             driver.attach_world(self.world)
         self.frame_dt = frame_dt
         self.frame_hook = frame_hook
+        self.on_frame = on_frame          # called with every recorded frame (live view)
         goal_xy = None
         if scenario.mission is not None and scenario.mission.waypoints:
             lc = LocalCartesian(scenario.map.origin)
@@ -143,6 +145,8 @@ class Simulation:
                 if self.frame_hook is not None:
                     snap.update(self.frame_hook(w, self.driver))
                 self.frames.append(snap)
+                if self.on_frame is not None:
+                    self.on_frame(snap)
             if end_at is None:
                 if w.collisions:
                     end_at = w.t + 1.0

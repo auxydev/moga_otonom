@@ -4,6 +4,7 @@ Run with a Python environment that has ``metadrive-simulator`` installed:
 
     python scripts/run_metadrive.py --seeds 0 1 2 3 4 --map 3 --density 0.1 --out out/metadrive
     python scripts/run_metadrive.py --seeds 10 --map SCrRX --accident 1.0 --plot
+    python scripts/run_metadrive.py --seeds 3 --render          # watch it in MetaDrive's 3-D window
 
 Every episode uses a different procedurally generated road network
 (``--map N``: N random blocks, or a block string such as ``SCrRX``:
@@ -23,9 +24,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _run(args):
-    seed, map_spec, density, accident, max_time, plot, out = args
+    seed, map_spec, density, accident, max_time, plot, out, render = args
     from moga.bridges.metadrive import run_episode
-    r = run_episode(seed, map_spec, density, accident, max_time=max_time, record=plot)
+    r = run_episode(seed, map_spec, density, accident, max_time=max_time, record=plot,
+                    verbose=1 if render else 0, render=render)
     if plot:
         plot_episode(r, os.path.join(out, f"metadrive_seed{seed}.png"))
     return r.summary()
@@ -71,15 +73,21 @@ def main():
     ap.add_argument("--max-time", type=float, default=240.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--render", action="store_true",
+                    help="show the episodes one after another in MetaDrive's 3-D window (needs OpenGL)")
     ap.add_argument("--min-success", type=float, default=0.0,
                     help="exit with an error if the arrival rate is lower (CI)")
     ap.add_argument("--out", default="out/metadrive")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     map_spec = int(args.map) if args.map.isdigit() else args.map
-    jobs = [(s, map_spec, args.density, args.accident, args.max_time, args.plot, args.out) for s in args.seeds]
-    with ProcessPoolExecutor(args.workers) as ex:
-        results = list(ex.map(_run, jobs))
+    jobs = [(s, map_spec, args.density, args.accident, args.max_time, args.plot, args.out, args.render)
+            for s in args.seeds]
+    if args.render or args.workers <= 1:
+        results = [_run(j) for j in jobs]          # one window at a time
+    else:
+        with ProcessPoolExecutor(args.workers) as ex:
+            results = list(ex.map(_run, jobs))
     for r in results:
         print(f"seed {r['seed']:3d} map {r['map']:>6s}: {r['outcome']:13s} t={r['sim_time']:6.1f}s "
               f"route {r['route_completion'] * 100:5.1f}% of {r['route_length']:5.0f} m  "
