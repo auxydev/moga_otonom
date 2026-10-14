@@ -67,6 +67,7 @@ class PointCloud:
     points: np.ndarray      # (N,3) in vehicle (base_link) frame
     intensity: np.ndarray   # (N,)
     ring: np.ndarray        # (N,) laser channel index
+    time_offset: np.ndarray | None = None   # (N,) capture time of each point minus t [s]
 
 
 @dataclass

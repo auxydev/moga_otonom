@@ -31,7 +31,7 @@ from moga.autonomy.planning.route_path import RoutePath, build_route_path, speed
 from moga.autonomy.planning.route_planner import Route, RoutePlanner, RouteStep
 from moga.autonomy.safety.aeb import AEB
 from moga.autonomy.safety.edr import EventDataRecorder
-from moga.autonomy.safety.health import FAILED, HealthMonitor
+from moga.autonomy.safety.health import FAILED, HealthConfig, HealthMonitor
 from moga.autonomy.safety.odd import ODDMonitor
 from moga.autonomy.safety.supervisor import SafetyState, SafetySupervisor
 from moga.common.messages import ControlCommand, Mission, SensorBundle, TurnSignal
@@ -61,6 +61,7 @@ class StackConfig:
     time_gap: float = 1.6            # s, ACC following time gap
     standstill_gap: float = 4.0      # m
     plan_period: float = 0.1         # s
+    sensors: tuple[str, ...] | None = None  # fitted sensor streams (None: full Moga set)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "StackConfig":
@@ -108,7 +109,7 @@ class AutonomyStack:
         self.obstacles = []
         # safety
         self.aeb = AEB(params)
-        self.health = HealthMonitor(params)
+        self.health = HealthMonitor(params, HealthConfig(sensors=self.cfg.sensors))
         self.odd = ODDMonitor(hd_map)
         self.supervisor = SafetySupervisor()
         self.safety = SafetyState()

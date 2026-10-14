@@ -247,7 +247,11 @@ class TrafficRules:
                 if d_o > 60.0 or d_o < -1.0:
                     continue
                 t_o = d_o / max(tr.speed, 0.5)
-                if t_o < t_reach + t_clear + c.junction_gap and t_o + 4.0 > t_reach:
+                # time until it has left the junction again (long connectors in
+                # large junctions take several seconds to traverse)
+                l_c = max(self.map.lanes[x].length for x in conflicts & set(lane_o.successors))
+                t_o_out = (d_o + l_c + tr.length) / max(tr.speed, 0.5)
+                if t_o < t_reach + t_clear + c.junction_gap and t_o_out + 1.0 > t_reach:
                     return [RuleStop(self._entry_stop(ref, k), "yield_junction", str(tr.id))]
             return []
         return []

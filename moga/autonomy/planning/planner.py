@@ -135,6 +135,13 @@ class TacticalPlanner:
         self.mrm_stop_xy: tuple[float, float] | None = None
 
     # ------------------------------------------------------------ helpers
+    def _lineage(self, lane_id: str, depth: int = 2) -> frozenset:
+        out, frontier = {lane_id}, [lane_id]
+        for _ in range(depth):
+            frontier = [p for f in frontier for p in self.map.lanes[f].predecessors]
+            out.update(frontier)
+        return frozenset(out)
+
     def _lane_s(self, lane_id: str, x: float, y: float, hint: float | None = None):
         cl = self.map.lanes[lane_id].centerline
         if hint is not None:
@@ -497,7 +504,7 @@ class TacticalPlanner:
             need, need_dist, remaining, lc_ok,
             can_bypass=not near_junction and (safety is None or safety.state == "NOMINAL"),
             keep_right_ok=bool(route is not None and right_nb is not None and right_nb in route.lane_set),
-            bypass_done=bypass_done)
+            bypass_done=bypass_done, cur_lineage=self._lineage(self.cur_lane))
         was_bypass = self.behavior.state == "BYPASS"
         dec = self._mrm_decide(mrm, est.v, right_nb, objs) if mrm is not None else self.behavior.decide(ctx)
         if dec.bypass and not was_bypass:
@@ -532,8 +539,9 @@ class TacticalPlanner:
         lo, hi = -half_ok, half_ok
         d_pref = 0.0
         d_targets = [0.0, 0.4, -0.4]
-        if dec.target in ("left", "right") and dec.state == "LANE_CHANGE":
-            nb = left_nb if dec.target == "left" else right_nb
+        lc_nb = (left_nb if dec.target == "left" else right_nb) if dec.state == "LANE_CHANGE" else None
+        if dec.target in ("left", "right") and lc_nb is not None:
+            nb = lc_nb
             x0, y0, _, _ = ref.line.interpolate(s_ego)
             sn, dn = self._lane_s(nb, x0, y0)
             d_pref = -dn          # neighbour centre expressed in the current reference

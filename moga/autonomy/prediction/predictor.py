@@ -46,6 +46,8 @@ class Predictor:
             modes.append((0.7, self._cv(tr)))
         else:
             modes.append((0.7, self._static(tr)))
+        if self.map is None:
+            return modes
         m = self.map.best_match(tr.x, tr.y, None, max_dist=8.0, include_shoulder=True,
                                 heading_tol=math.pi)
         if m is None:
@@ -80,7 +82,7 @@ class Predictor:
         if tr.cls == ObjectClass.PEDESTRIAN:
             return PredictedObject(tr, self._pedestrian_modes(tr), self.dt)
         heading = math.atan2(tr.vy, tr.vx)
-        if tr.cls in VEHICLE or tr.cls == ObjectClass.UNKNOWN:
+        if self.map is not None and (tr.cls in VEHICLE or tr.cls == ObjectClass.UNKNOWN):
             m = self.map.best_match(tr.x, tr.y, heading, max_dist=2.5, include_shoulder=True,
                                     heading_tol=math.radians(35))
             if m is not None:

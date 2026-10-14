@@ -40,6 +40,10 @@ class BehaviorContext:
     can_bypass: bool = False
     keep_right_ok: bool = False      # right lane is part of the route
     bypass_done: bool = False        # the bypassed obstacle is fully behind us
+    # the current lane and the lanes it continues (predecessors): a lane change
+    # whose target lane ends at a road segment boundary has arrived when the
+    # ego is in the target's continuation
+    cur_lineage: frozenset = frozenset()
 
 
 @dataclass
@@ -102,12 +106,14 @@ class BehaviorPlanner:
 
         # ------------------------------------------------ ongoing manoeuvres
         if self.state == "LANE_CHANGE":
-            if c.lanes.get("cur") == self.lc_lane:
+            if c.lanes.get("cur") == self.lc_lane or self.lc_lane in c.cur_lineage:
                 # arrived in the target lane
                 self._set("LANE_KEEP", t)
                 self.cooldown_until = t + cfg.cooldown
                 self.lc_lane = None
-            elif t - self.t_enter > cfg.lc_timeout:
+            elif t - self.t_enter > cfg.lc_timeout or c.lanes.get(self.target) is None:
+                # timed out, or the target lane ended / is no longer adjacent
+                # (lane drop, new road segment): continue in the current lane
                 self._set("LANE_KEEP", t)
                 self.cooldown_until = t + cfg.cooldown
                 self.lc_lane = None

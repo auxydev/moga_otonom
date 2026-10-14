@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from moga.autonomy.perception.lidar_detection import LidarDetector
+from moga.autonomy.perception.deskew import deskew
+from moga.autonomy.perception.lidar_detection import LidarDetector, LidarDetectorConfig
 from moga.autonomy.prediction.predictor import Predictor
 from moga.autonomy.tracking.tracker import MultiObjectTracker
 from moga.common.messages import LocalizationEstimate, PredictedObject, SensorBundle, TrackedObject
@@ -12,8 +13,9 @@ from moga.map.hd_map import HDMap
 
 
 class ObjectPerception:
-    def __init__(self, hd_map: HDMap, use_radar: bool = True):
-        self.detector = LidarDetector(hd_map)
+    def __init__(self, hd_map: HDMap | None, use_radar: bool = True,
+                 lidar_cfg: LidarDetectorConfig | None = None):
+        self.detector = LidarDetector(hd_map, lidar_cfg)
         self.tracker = MultiObjectTracker()
         self.predictor = Predictor(hd_map)
         self.use_radar = use_radar
@@ -27,7 +29,12 @@ class ObjectPerception:
         """Returns True when the object list was refreshed."""
         updated = False
         if b.lidar is not None:
-            self.detections = self.detector.detect(b.lidar, est.x, est.y, est.yaw)
+            pc = b.lidar
+            if pc.time_offset is not None and self.detector.cfg.deskew:
+                pc = type(pc)(pc.t, deskew(pc.points, pc.time_offset, est.v, est.yaw_rate),
+                              pc.intensity, pc.ring, None)
+            kappa = est.yaw_rate / max(est.v, 2.0)
+            self.detections = self.detector.detect(pc, est.x, est.y, est.yaw, kappa)
             self.tracker.update_lidar(b.t, self.detections, (est.x, est.y))
             self.obstacle_points = self.detector.last_debug.get("obstacle_world", np.zeros((0, 2)))
             self.last_lidar_t = b.t

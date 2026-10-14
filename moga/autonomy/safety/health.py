@@ -47,6 +47,9 @@ class HealthConfig:
     steer_time: float = 0.8           # s of persistent steering residual
     brake_time: float = 0.8           # s of insufficient deceleration
     hold: float = 3.0                 # s a failure stays latched after recovery
+    # sensor streams fitted to this vehicle (None: the full Moga sensor set);
+    # streams that are not fitted are not supervised
+    sensors: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -137,15 +140,16 @@ class HealthMonitor:
         c = self.cfg
         if self.t0 is None:
             self.t0 = t
-        rep = HealthReport({k: OK for k in ("imu", "wheel", "gnss", "lidar", "camera", "radar",
-                                             "traffic_lights", "localization", "steering",
-                                             "brakes")})
+        comps = ("imu", "wheel", "gnss", "lidar", "camera", "radar", "traffic_lights")
+        if c.sensors is not None:
+            comps = tuple(k for k in comps if k in c.sensors)
+        rep = HealthReport({k: OK for k in comps + ("localization", "steering", "brakes")})
         for name in PERIODS:
             if getattr(b, name, None) is not None:
                 self.last_seen[name] = t
         if t - self.t0 > c.grace:
             for name, period in PERIODS.items():
-                if name == "vehicle":
+                if name == "vehicle" or name not in rep.status:
                     continue
                 age = t - self.last_seen.get(name, self.t0)
                 if age > c.timeout_periods * period + 0.05:
