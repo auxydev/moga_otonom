@@ -18,13 +18,21 @@ import argparse
 import json
 import os
 import sys
+import warnings
 from concurrent.futures import ProcessPoolExecutor
+
+# MetaDrive 0.2.6 and its pinned dependencies emit many deprecation warnings
+warnings.simplefilter("ignore")
+os.environ.setdefault("PYTHONWARNINGS", "ignore")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _run(args):
     seed, map_spec, density, accident, max_time, plot, out, render = args
+    import importlib
+    importlib.import_module("metadrive")      # its imports reset the warning filters
+    warnings.simplefilter("ignore")
     from moga.bridges.metadrive import run_episode
     r = run_episode(seed, map_spec, density, accident, max_time=max_time, record=plot,
                     verbose=1 if render else 0, render=render)
