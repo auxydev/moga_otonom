@@ -693,7 +693,11 @@ class TacticalPlanner:
                           else pr for pr in preds_plan]
         res = self.frenet.plan(ref.line, st, d_targets, d_pref, lts, preds_plan, (lo, hi), vlim_fn, t,
                                s_based=True if dec.bypass else None,
-                               lat_dists=(10.0, 14.0, 20.0) if dec.bypass else None,
+                               # slow lane changes: spread the lateral move over a longer
+                               # distance (heading <= ~25 deg; the tracking overshoot of a
+                               # steep low-speed lane change can reach the road edge)
+                               lat_dists=(10.0, 14.0, 20.0) if dec.bypass else
+                               (14.0, 20.0, 28.0) if dec.state == "LANE_CHANGE" else None,
                                lat_anchor=(self.prev.lat_end if self.stitched and self.prev is not None
                                            and self.prev.ref_key == ref.lanes else None),
                                v_ref_fn=vref_fn,
