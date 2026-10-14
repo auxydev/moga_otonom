@@ -135,6 +135,16 @@ class TacticalPlanner:
         self.mrm_stop_xy: tuple[float, float] | None = None
 
     # ------------------------------------------------------------ helpers
+    def _road_on_route(self, lane_id: str, route: RouteTracker) -> bool:
+        for side in ("left_neighbor", "right_neighbor"):
+            cur, guard = lane_id, 0
+            while cur is not None and guard < 8:
+                if cur in route.lane_set:
+                    return True
+                cur = getattr(self.map.lanes[cur], side)
+                guard += 1
+        return False
+
     def _lineage(self, lane_id: str, depth: int = 2) -> frozenset:
         out, frontier = {lane_id}, [lane_id]
         for _ in range(depth):
@@ -164,6 +174,10 @@ class TacticalPlanner:
             nxt = None
             if route is not None:
                 on = [x for x in lane.successors if x in route.lane_set]
+                if not on:
+                    # off the route's lanes (e.g. mid lane change at a segment
+                    # boundary): stay on the route's road (a neighbour is on it)
+                    on = [x for x in lane.successors if self._road_on_route(x, route)]
                 nxt = on[0] if on else None
             if nxt is None and lane.successors:
                 cand = sorted(lane.successors,
@@ -504,7 +518,8 @@ class TacticalPlanner:
             need, need_dist, remaining, lc_ok,
             can_bypass=not near_junction and (safety is None or safety.state == "NOMINAL"),
             keep_right_ok=bool(route is not None and right_nb is not None and right_nb in route.lane_set),
-            bypass_done=bypass_done, cur_lineage=self._lineage(self.cur_lane))
+            bypass_done=bypass_done, cur_lineage=self._lineage(self.cur_lane),
+            in_junction=lane.in_junction)
         was_bypass = self.behavior.state == "BYPASS"
         dec = self._mrm_decide(mrm, est.v, right_nb, objs) if mrm is not None else self.behavior.decide(ctx)
         if dec.bypass and not was_bypass:

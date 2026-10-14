@@ -74,7 +74,9 @@ Nominal zincire paralel çalışan, ondan bağımsız bileşenler
 |---------|-------|
 | WGS‑84 | GNSS alıcısının verdiği enlem/boylam/yükseklik |
 | Harita (ENU) | HD haritanın coğrafi orijinine bağlı yerel Doğu‑Kuzey‑Yukarı, metre |
-| base_link | Arka aks merkezi; x ileri, y sol, z yukarı |
+| base_link | Arka aks merkezi; x ileri, y sol, z yukarı (z = 0 zeminde) |
+| Sensör çerçeveleri | `T_vehicle_<sensör>` 4×4 dönüşümleri, araç başına bir `SensorRig` JSON dosyası (`common/calibration.py`) |
+| Kamera | Doğrultulmuş (rectified) kamera: x sağ, y aşağı, z ileri; `P` (3×4) + `T_cam_vehicle` |
 | Frenet | Referans çizgi boyunca `s` (yay uzunluğu) ve `d` (sola pozitif yanal sapma) |
 
 ## Zamanlama
@@ -97,7 +99,9 @@ moga/
   map/         HD harita modeli, harita oluşturucu, harita kütüphanesi
   sim/         dünya, araç modeli, aktörler, sensörler, hatalar, simülasyon koşucusu, oracle
   autonomy/    otonomi yığını (lokalizasyon, algılama, takip, tahmin, planlama, kontrol, güvenlik)
-  eval/        metrikler, toplu koşucu, raporlama
+  eval/        metrikler, toplu koşucu, raporlama, gerçek kayıtlarda açık çevrim değerlendirme (replay)
+  io/          gerçek sensör kayıtları (KITTI raw okuyucu)
+  bridges/     üçüncü taraf simülatör köprüleri (MetaDrive)
   viz/         üstten görünüm render, GIF/PNG
   scenarios/   milestone bazlı test senaryoları
 scripts/       komut satırı araçları
@@ -112,3 +116,12 @@ docs/          dokümantasyon ve görseller
 `TrackedObject`, `Trajectory`, `ControlCommand` …).  Otonomi yığını yalnızca bu
 mesajlarla konuşur; ileride ROS 2 köprüsü / gerçek donanım sürücüleri aynı
 arayüze bağlanabilir.
+
+Aynı arayüz üç kaynaktan beslenir ve yığın kodu değişmeden çalışır
+(M7, ayrıntılar: [`REAL_DATA.md`](REAL_DATA.md)):
+
+| Kaynak | Sağlayıcı | Kullanım |
+|---|---|---|
+| MogaSim | `sim/sensors/*` | kapalı çevrim senaryolar, hata enjeksiyonu, CI |
+| Gerçek kayıt (KITTI raw) | `io/kitti.py` | açık çevrim algılama değerlendirmesi (`eval/replay.py`) |
+| MetaDrive | `bridges/metadrive.py` | bağımsız simülatörde kapalı çevrim sürüş |

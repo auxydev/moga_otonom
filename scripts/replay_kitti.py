@@ -43,7 +43,7 @@ def figures(k: KittiRaw, frames: list[int], out: str):
     from moga.autonomy.perception.lane_detection import LaneDetector
     from moga.autonomy.perception.object_pipeline import ObjectPerception
     from moga.common.geometry import box_corners
-    from moga.eval.replay import estimate_from_gt, to_vehicle
+    from moga.eval.replay import ROAD_USERS, estimate_from_gt, to_vehicle
 
     perc = ObjectPerception(None, use_radar=False, lidar_cfg=LidarDetectorConfig.for_rig(k.rig))
     lanes = LaneDetector(k.camera)
@@ -76,6 +76,8 @@ def figures(k: KittiRaw, frames: list[int], out: str):
             box3d(a0, g.x, g.y, g.yaw, g.length, g.width, g.height, "lime")
         pose = (est.x, est.y, est.yaw)
         for tr in perc.tracks:
+            if tr.cls not in ROAD_USERS:
+                continue                  # unclassified obstacles are not drawn in the image
             x, y = to_vehicle(tr.x, tr.y, pose)
             box3d(a0, x, y, tr.yaw - est.yaw, tr.length, tr.width, 1.5, "red")
         xs = np.linspace(6, 40, 40)
@@ -94,17 +96,21 @@ def figures(k: KittiRaw, frames: list[int], out: str):
             a1.fill(c[:, 0], c[:, 1], fill=False, ec="lime", lw=2)
         for d in perc.detections:
             x, y = to_vehicle(d.x, d.y, pose)
+            if not (-10 < x < 45 and abs(y) < 22):
+                continue
             c = box_corners(x, y, d.yaw - est.yaw, d.length, d.width)
-            a1.fill(c[:, 0], c[:, 1], fill=False, ec="red", lw=1)
-            a1.text(x, y - 0.9, d.cls.name[:3].lower(), color="red", fontsize=6, ha="center")
+            col = "red" if d.cls in ROAD_USERS else "0.4"
+            a1.fill(c[:, 0], c[:, 1], fill=False, ec=col, lw=1)
+            a1.text(x, y - 0.9, d.cls.name[:3].lower(), color=col, fontsize=6, ha="center",
+                    clip_on=True)
         a = math.radians(38)
         for sgn in (1, -1):
             a1.plot([0, 45 * math.cos(a)], [0, sgn * 45 * math.sin(a)], "k--", lw=0.6)
         a1.set_xlim(-10, 45)
         a1.set_ylim(-22, 22)
         a1.set_aspect("equal")
-        a1.set_title("BEV: LiDAR points (height), annotations (green), detections (red); "
-                     "dashed: annotated camera FOV", fontsize=9)
+        a1.set_title("BEV: LiDAR points (height), annotations (green), detections (red: road "
+                     "users, grey: other obstacles); dashed: annotated camera FOV", fontsize=9)
         fig.savefig(os.path.join(out, f"kitti_{k.drive:04d}_{i:04d}.png"), dpi=80, bbox_inches="tight")
         plt.close(fig)
 

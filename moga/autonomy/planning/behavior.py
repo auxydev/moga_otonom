@@ -44,6 +44,7 @@ class BehaviorContext:
     # whose target lane ends at a road segment boundary has arrived when the
     # ego is in the target's continuation
     cur_lineage: frozenset = frozenset()
+    in_junction: bool = False        # the current lane is a junction connector
 
 
 @dataclass
@@ -111,9 +112,10 @@ class BehaviorPlanner:
                 self._set("LANE_KEEP", t)
                 self.cooldown_until = t + cfg.cooldown
                 self.lc_lane = None
-            elif t - self.t_enter > cfg.lc_timeout or c.lanes.get(self.target) is None:
-                # timed out, or the target lane ended / is no longer adjacent
-                # (lane drop, new road segment): continue in the current lane
+            elif t - self.t_enter > cfg.lc_timeout or c.lanes.get(self.target) is None or c.in_junction:
+                # timed out, the target lane ended / is no longer adjacent (lane
+                # drop, new road segment) or we entered a junction (no lane
+                # changes inside it): continue in the current lane
                 self._set("LANE_KEEP", t)
                 self.cooldown_until = t + cfg.cooldown
                 self.lc_lane = None
@@ -129,7 +131,7 @@ class BehaviorPlanner:
                 return BehaviorDecision("BYPASS", "cur", "obstacle", 0, bypass=True)
         if self.state == "PREPARE_LC":
             side = self.target
-            lane_ok = c.lanes.get(side) is not None and c.lc_allowed.get(side, False)
+            lane_ok = c.lanes.get(side) is not None and c.lc_allowed.get(side, False) and not c.in_junction
             still_wanted = self._wanted(c) == (side, self.reason) or self.reason == "route"
             if not lane_ok or not still_wanted:
                 self._set("LANE_KEEP", t)
@@ -143,7 +145,8 @@ class BehaviorPlanner:
                 return BehaviorDecision("PREPARE_LC", side, self.reason, sig[side])
 
         # ------------------------------------------------ new decisions
-        side, reason = self._wanted(c)
+        # no lane changes inside a junction
+        side, reason = (None, "") if c.in_junction else self._wanted(c)
         if side is not None and t >= self.cooldown_until or (side is not None and reason == "route"):
             self._set("PREPARE_LC", t, side, reason)
             return BehaviorDecision("PREPARE_LC", side, reason, sig[side])

@@ -1,0 +1,15 @@
+# Separate Python 3.11 environment for the MetaDrive closed-loop tests
+# (scripts/run_metadrive.py).  MetaDrive 0.2.6 predates NumPy 1.24 / gym 0.26,
+# hence the pins.  No GPU needed (headless, no rendering).
+#   python3.11 -m venv .venv-metadrive
+#   .venv-metadrive/bin/pip install -r requirements-metadrive.txt
+metadrive-simulator==0.2.6.0
+gym==0.23.1
+numpy==1.23.5
+scipy==1.11.4
+protobuf==3.20.3
+matplotlib==3.8.4
+opencv-python-headless==4.8.1.78
+panda3d==1.10.16
+pillow>=10.0
+pytest>=8.0

@@ -9,7 +9,8 @@ kapalı çevrim çalışan bir prototip ve otomatik testler bulunur.
 Yol haritası ve durum: [`docs/MILESTONES.md`](docs/MILESTONES.md) ·
 Mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
 Güvenlik konsepti: [`docs/SAFETY.md`](docs/SAFETY.md) ·
-Senaryo raporu: [`docs/SCENARIO_REPORT.md`](docs/SCENARIO_REPORT.md)
+Senaryo raporu: [`docs/SCENARIO_REPORT.md`](docs/SCENARIO_REPORT.md) ·
+Gerçek veri ve MetaDrive: [`docs/REAL_DATA.md`](docs/REAL_DATA.md)
 
 ## Yetenekler (özet)
 
@@ -25,6 +26,9 @@ Senaryo raporu: [`docs/SCENARIO_REPORT.md`](docs/SCENARIO_REPORT.md)
   şeridine / kenara çekilip durma, MRC, olay veri kaydı (EDR).
 * **Doğrulama**: MogaSim'de 38 kapalı çevrim senaryo + hata enjeksiyonu, deterministik
   tekrar, CI.
+* **Gerçek veri / bağımsız simülatör (M7)**: kalibre sensör takımı modeli, gerçek
+  Velodyne + kamera kaydında (KITTI raw) açık çevrim algılama ölçümü, açık kaynak
+  MetaDrive simülatöründe kapalı çevrim sürüş.
 
 ## Neden kendi simülatörümüz?
 
@@ -65,6 +69,12 @@ python scripts/make_figures.py m4_rural_bypass 16 30.6 31.8 33.4 --columns 2 --v
 
 # testler (paralel)
 python -m pytest -q -n 4
+
+# gerçek kayıt (KITTI raw, ayrıca indirilir): algılama değerlendirmesi + görseller
+python scripts/replay_kitti.py --root /data/kitti --drives 5 15 --figures 150 --out out/kitti
+
+# MetaDrive'da kapalı çevrim (ayrı Python 3.11 ortamı: requirements-metadrive.txt)
+.venv-metadrive/bin/python scripts/run_metadrive.py --seeds 0 1 2 3 --map 3 --plot --out out/metadrive
 ```
 
 ## Durum
@@ -78,6 +88,7 @@ python -m pytest -q -n 4
 | M4 – Davranış + hareket planlama (şerit değiştirme, sollama, AEB) | ✅ |
 | M5 – Şehir içi sürüş (kavşak, ışık, yaya) | ✅ |
 | M6 – Seviye 4 güvenlik (arıza, ODD, MRM) | ✅ |
+| M7 – Gerçek sensör verisi (KITTI) + bağımsız simülatör (MetaDrive) | ✅ |
 
 ## Görseller
 

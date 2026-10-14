@@ -14,6 +14,7 @@ yeşilken tamamlanmış sayılır (regresyon koruması).
 | M4 | Davranış + hareket planlama | Davranış durum makinesi, Frenet kafes (lattice) planlayıcı, çarpışma kontrolü, ACC, şerit değiştirme, sollama, engelden kaçınma, araya girme (cut‑in), AEB | Otoyolda sollama / şerit değiştirme / acil fren senaryoları | ✅ |
 | M5 | Şehir içi sürüş | Kavşak bağlayıcıları, trafik ışığı algılama, stop çizgisi, yaya geçidi, yayalara yol verme, kavşak çatışma kontrolü, kentsel GPS görevi | Sinyalize grid üzerinde A noktasından B noktasına otonom sürüş | ✅ |
 | M6 | Seviye 4 güvenlik | Sağlık izleme, ODD izleme, hata enjeksiyonu, degrade modlar, Minimum Risk Manevrası (emniyet şeridine çekilip durma), olay veri kaydedici (EDR), tam senaryo seti + CI | Sensör/aktüatör arızasında araç kendini güvenli duruma getirir | ✅ |
+| M7 | Gerçek sensör verisi + bağımsız simülatör | Kalibrasyon / sensör takımı modeli, KITTI raw okuyucu, LiDAR hareket telafisi, haritasız algılama, gerçek kayıtta açık çevrim değerlendirme, MetaDrive köprüsü | Gerçek Velodyne + kamera kaydında ölçülen algılama; MetaDrive'da GPS göreviyle kapalı çevrim sürüş | ✅ |
 
 ## Seviye 4 (SAE J3016) gereksinimlerinin karşılanması
 
@@ -353,3 +354,33 @@ Regresyon: M0–M6'nın **38 senaryosu** + birim testleri yeşil
 
 ![](images/m6_camera_failure_pullover.png)
 ![](images/m6_urban_light_failure.png)
+
+## M7 – Gerçek sensör verisi ve bağımsız simülatör (tamamlandı)
+
+Ayrıntılar, sayılar ve gerçek araca geçiş için gerekenler:
+[`REAL_DATA.md`](REAL_DATA.md).
+
+* **Kalibrasyon** (`common/calibration.py`): 4×4 dönüşümler, `ProjectiveCamera`
+  (P / dış parametre / lens bozulması + `undistort`), araç başına `SensorRig` JSON
+  (LiDAR, IMU, GNSS anten kolu, kameralar, LiDAR dönüş süresi, gövde kutusu).
+* **Gerçek kayıt okuyucu** (`io/kitti.py`): KITTI raw (Velodyne HDL‑64E, kalibre kamera,
+  OXTS GNSS/INS, 3B etiketler) → Moga mesajları; zip'ten doğrudan okuma; GNSS'i
+  DGPS / SPS kalitesine düşüren hata modeli.
+* **Algılama, gerçek sensör için** (`perception/`): tarama hareket telafisi (de‑skew),
+  haritasız kip (ego yolu yön önceli), gövde dönüşü filtresi, voksel ızgara, bölgesel
+  (içten dışa) zemin modeli, isteğe bağlı şekil kontrolleri, 3.5× hızlanma.
+* **Açık çevrim değerlendirme** (`eval/replay.py`, `scripts/replay_kitti.py`): kamera
+  görüş alanı / sürüş koridoru bölgeleri, Macar eşleştirme, algılama + iz metrikleri,
+  şerit algılama kararlılığı, süre; görseller (kamera üstüne 3B kutular + BEV).
+* **MetaDrive köprüsü** (`bridges/metadrive.py`, `scripts/run_metadrive.py`): yol ağı →
+  `HDMap`, Bullet dünyasına ışın atan 32 ışınlı LiDAR, Moga GNSS/IMU/teker hata modelleri,
+  aktüatör dinamiği + kalibre gaz/fren, yalnızca GNSS hedefiyle görev.
+* **Yığın iyileştirmeleri** (MetaDrive'ın bulduğu hatalar): segment sınırında şerit
+  değişimi varışı, şerit düşmesinde / kavşakta şerit değişimi iptali, kavşak içinde
+  şerit değişimi yok, rota yolunda ardıl seçimi, kavşak yol vermede diğer aracın çıkış
+  süresi, takılı sensör kümesine göre sağlık izleme.
+* **Testler**: `tests/test_m7_real_data.py` (kalibrasyon, de‑skew, haritasız algılama,
+  eğimli zemin, sentetik KITTI kaydı, eşleştirme, harita dönüşümü, DBW, MetaDrive
+  bölümü – MetaDrive kuruluysa).
+
+<!-- METADRIVE_SUMMARY -->

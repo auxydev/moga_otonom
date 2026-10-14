@@ -71,6 +71,8 @@ def main():
     ap.add_argument("--max-time", type=float, default=240.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--min-success", type=float, default=0.0,
+                    help="exit with an error if the arrival rate is lower (CI)")
     ap.add_argument("--out", default="out/metadrive")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -90,6 +92,8 @@ def main():
     tag = f"map{args.map}_d{args.density}_a{args.accident}"
     with open(os.path.join(args.out, f"metadrive_{tag}.json"), "w") as f:
         json.dump(results, f, indent=1, default=str)
+    if ok < args.min_success * n:
+        sys.exit(f"arrival rate {ok}/{n} below {args.min_success:.0%}")
 
 
 if __name__ == "__main__":

@@ -376,7 +376,9 @@ class DriveByWire:
             self.i_term *= 0.95
         a = self.acc + self.i_term
         if v < 0.3 and self.acc <= 0.0:
-            u = -0.6                                   # hold at standstill
+            # hold at standstill: Bullet's brake impulse makes a hard-braked
+            # vehicle creep (up to 5 cm/s); a ~2 m/s^2 brake holds it best
+            u = -min(1.0, 2.0 / self.k_b)
         elif a >= 0.0:
             u = max(a / self.k_e, 1e-4)
         else:
@@ -466,7 +468,13 @@ def route_polyline(md_vehicle) -> Polyline:
 def run_episode(seed: int, map_spec=3, traffic_density: float = 0.15, accident_prob: float = 0.0,
                 max_time: float = 240.0, stack_overrides: dict | None = None,
                 origin: GeoOrigin = GeoOrigin(39.92077, 32.85411, 900.0), record: bool = True,
-                verbose: bool = False) -> EpisodeResult:
+                verbose: int = 0) -> EpisodeResult:
+    """One MetaDrive episode driven by the Moga stack.
+
+    ``map_spec``: number of random blocks or a block string (``"SCrRX"``);
+    ``record``: keep the trajectory / traffic traces for plotting;
+    ``verbose``: 1 status every 5 s, 2 every second (+ localisation error),
+    3 adds ground-truth traffic vs. tracks, 5 adds AEB / emergency details."""
     from moga.autonomy.stack import AutonomyStack, StackConfig
     env = make_env(seed, map_spec, traffic_density, accident_prob, horizon=int(max_time / DT) + 10)
     res = EpisodeResult(seed, str(map_spec))
@@ -544,7 +552,6 @@ def run_episode(seed: int, map_spec=3, traffic_density: float = 0.15, accident_p
             prev_estop = estop
             ego_box = (*pose.offset(params.center_offset), pose.yaw, params.length, params.width)
             if k % 5 == 0:
-                others = []
                 for obj in env.engine.get_objects().values():
                     if obj is v or not hasattr(obj, "position"):
                         continue
@@ -614,8 +621,8 @@ def run_episode(seed: int, map_spec=3, traffic_density: float = 0.15, accident_p
                         _, d_off = hd.lanes[lane].centerline.project(np.array([pose.x, pose.y]))
                     md_lane = getattr(v, "lane", None)
                     md_lat = md_lane.local_coordinates(v.position)[1] if md_lane is not None else None
-                    res.detail = (f"{','.join(flags)} lane={lane} offset={d_off} md_lane={getattr(v, 'lane_index', None)} "
-                                  f"md_lat={md_lat} yaw_rel={math.degrees(wrap_angle(st.yaw - hd.lanes[lane].lane_heading if False else 0))}")
+                    res.detail = (f"{','.join(flags)} lane={lane} offset={d_off} "
+                                  f"md_lane={getattr(v, 'lane_index', None)} md_lat={md_lat}")
                 break
         res.sim_time = (k + 1) * DT
         res.route_completion = min(1.0, s_route / max(route.length, 1.0))

@@ -130,3 +130,8 @@ AEB, acil durma, MRM / MRC geçişi, bileşen arızası. Tetiklemede tampon dond
   “güvenli duruş yapılabilir” koşulunun ön şartıdır.
 * Uzaktan destek (teleoperasyon / görev iptali, MRC'den çıkış) ve yolcu
   arayüzü bu prototipin kapsamı dışındadır.
+* Gerçek sensör verisiyle ölçülen algılama sınırları (M7): işaretli yolda araç
+  algılama koridorda %94, ancak yoğun şehir dokusunda geometrik LiDAR dedektörünün
+  kesinliği ~%30 – haritasız kipte yol kenarı nesneleri yol kullanıcısı
+  sanılabilir. Gerçek araç için öğrenmeli dedektör + HD harita ilgi bölgesi şarttır
+  ([`REAL_DATA.md`](REAL_DATA.md)).
